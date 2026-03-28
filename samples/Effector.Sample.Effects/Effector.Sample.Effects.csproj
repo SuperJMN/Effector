@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Effector.Sample.Effects</AssemblyName>
+    <RootNamespace>Effector.Sample.Effects</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Effector\Effector.csproj" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+
+  <Import Project="..\..\src\Effector.Build\buildTransitive\Effector.Build.props" />
+  <Import Project="..\..\src\Effector.Build\buildTransitive\Effector.Build.targets" />
+</Project>

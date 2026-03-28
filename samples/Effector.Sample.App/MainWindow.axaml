@@ -1,0 +1,337 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:effects="clr-namespace:Effector.Sample.Effects;assembly=Effector.Sample.Effects"
+        xmlns:local="clr-namespace:Effector.Sample.App"
+        x:Class="Effector.Sample.App.MainWindow"
+        x:DataType="local:MainWindowViewModel"
+        Width="1400"
+        Height="980"
+        MinWidth="860"
+        MinHeight="680"
+        Title="Effector Gallery"
+        FontFamily="avares://Avalonia.Fonts.Inter#Inter"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        TransparencyLevelHint="AcrylicBlur"
+        mc:Ignorable="d">
+  <Window.Background>
+    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#FFF5F7F1" Offset="0" />
+      <GradientStop Color="#FFF0E7DA" Offset="0.55" />
+      <GradientStop Color="#FFE7F1F8" Offset="1" />
+    </LinearGradientBrush>
+  </Window.Background>
+
+  <ScrollViewer x:Name="RootScrollViewer"
+                HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+          Margin="28"
+          RowSpacing="24">
+      <Border Grid.Row="0"
+              Padding="24"
+              CornerRadius="28"
+              Background="#F9FCFF"
+              BorderBrush="#24003A42"
+              BorderThickness="1">
+        <Grid x:Name="HeroContentGrid"
+              ColumnDefinitions="2.2*,1*"
+              ColumnSpacing="24">
+          <StackPanel Spacing="14">
+            <Border Padding="8,4"
+                    HorizontalAlignment="Left"
+                    CornerRadius="999"
+                    Background="#1A005C56">
+              <TextBlock Text="Avalonia 11.3.12 custom effects via weaving"
+                         FontSize="12"
+                         FontWeight="SemiBold"
+                         Foreground="#005C56" />
+            </Border>
+            <TextBlock Text="Effector Gallery"
+                       FontSize="38"
+                       FontWeight="SemiBold"
+                       Foreground="#1E2A2D" />
+            <TextBlock Text="This sample ships custom Skia-backed effects from a separate library, routes them through Avalonia's unchanged Visual.Effect contract, and shows them through code assignment, data binding, inline XAML object elements, string syntax parsing, keyframe animation, runtime SKSL shader passes, and pointer-driven shader uniforms."
+                       FontSize="15"
+                       Foreground="#4A5C60"
+                       TextWrapping="Wrap" />
+          </StackPanel>
+
+          <UniformGrid Columns="2"
+                       Rows="2"
+                       Margin="0,4,0,0">
+            <Border Margin="0,0,12,12"
+                    Padding="14"
+                    CornerRadius="20"
+                    Background="#FFF4F7EF">
+              <StackPanel Spacing="4">
+                <TextBlock Text="17"
+                           FontSize="28"
+                           FontWeight="Bold"
+                           Foreground="#2D584D" />
+                <TextBlock Text="popular sample effects"
+                           Foreground="#58716A" />
+              </StackPanel>
+            </Border>
+            <Border Margin="0,0,0,12"
+                    Padding="14"
+                    CornerRadius="20"
+                    Background="#FFFDF2E8">
+              <StackPanel Spacing="4">
+                <TextBlock Text="4"
+                           FontSize="28"
+                           FontWeight="Bold"
+                           Foreground="#9A5B20" />
+                <TextBlock Text="authoring styles"
+                           Foreground="#8D6E4D" />
+              </StackPanel>
+            </Border>
+            <Border Margin="0,0,12,0"
+                    Padding="14"
+                    CornerRadius="20"
+                    Background="#FFF0F8FF">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Skia"
+                           FontSize="24"
+                           FontWeight="Bold"
+                           Foreground="#27546A" />
+                <TextBlock Text="renderer target"
+                           Foreground="#5A7686" />
+              </StackPanel>
+            </Border>
+            <Border Padding="14"
+                    CornerRadius="20"
+                    Background="#FFF8F1FB">
+              <StackPanel Spacing="4">
+                <TextBlock Text="NuGet"
+                           FontSize="24"
+                           FontWeight="Bold"
+                           Foreground="#6A3D74" />
+                <TextBlock Text="buildTransitive wiring"
+                           Foreground="#7C6785" />
+              </StackPanel>
+            </Border>
+          </UniformGrid>
+        </Grid>
+      </Border>
+
+      <Grid x:Name="FeatureRowOneGrid"
+            Grid.Row="1"
+            ColumnDefinitions="*,*"
+            ColumnSpacing="24">
+        <Border Padding="20"
+                CornerRadius="24"
+                Background="#FAFFFFFF"
+                BorderBrush="#22003845"
+                BorderThickness="1">
+          <StackPanel Spacing="14">
+            <TextBlock Text="Bound Reusable Effect"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#1E2A2D" />
+            <TextBlock Text="This card binds Border.Effect to a TintEffect instance exposed from the window view model."
+                       Foreground="#55666B"
+                       TextWrapping="Wrap" />
+            <Border CornerRadius="20"
+                    Padding="18"
+                    Background="#FFFBF6EE"
+                    Effect="{Binding BoundTintEffect}">
+              <Grid RowDefinitions="Auto,Auto,Auto"
+                    RowSpacing="12">
+                <TextBlock Text="Bound effect instance"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           Foreground="#243033" />
+                <TextBlock Grid.Row="1"
+                           Text="Reusable effect types can live in a separate library and still flow through the stock Visual.Effect contract."
+                           Foreground="#55666B"
+                           TextWrapping="Wrap" />
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="10">
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#26007C70">
+                    <TextBlock Text="binding" Foreground="#007C70" />
+                  </Border>
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#26A86417">
+                    <TextBlock Text="separate library" Foreground="#A86417" />
+                  </Border>
+                </StackPanel>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </Border>
+
+        <Border Grid.Column="1"
+                Padding="20"
+                CornerRadius="24"
+                Background="#FAFFFFFF"
+                BorderBrush="#22003845"
+                BorderThickness="1">
+          <StackPanel Spacing="14">
+            <TextBlock Text="Inline XAML Object Element"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#1E2A2D" />
+            <TextBlock Text="This card declares a custom PixelateEffect directly in XAML using the same Visual.Effect property you already use for built-in Avalonia effects."
+                       Foreground="#55666B"
+                       TextWrapping="Wrap" />
+            <Border CornerRadius="20"
+                    Padding="18"
+                    Background="#FFF4FBFE">
+              <Border.Effect>
+                <effects:PixelateEffect CellSize="12" />
+              </Border.Effect>
+              <Grid RowDefinitions="Auto,Auto,Auto"
+                    RowSpacing="12">
+                <TextBlock Text="Inline XAML effect"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           Foreground="#243033" />
+                <TextBlock Grid.Row="1"
+                           Text="Object-element usage stays natural after weaving, which means the custom effect authoring model looks like normal Avalonia XAML."
+                           Foreground="#55666B"
+                           TextWrapping="Wrap" />
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="10">
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#261E88E5">
+                    <TextBlock Text="xaml object element" Foreground="#1E88E5" />
+                  </Border>
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#260071C2">
+                    <TextBlock Text="pixelate" Foreground="#0071C2" />
+                  </Border>
+                </StackPanel>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </Border>
+      </Grid>
+
+      <Grid x:Name="FeatureRowTwoGrid"
+            Grid.Row="2"
+            ColumnDefinitions="*,*"
+            ColumnSpacing="24">
+        <Border Padding="20"
+                CornerRadius="24"
+                Background="#FAFFFFFF"
+                BorderBrush="#22003845"
+                BorderThickness="1">
+          <StackPanel Spacing="14">
+            <TextBlock Text="String Effect Syntax"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#1E2A2D" />
+            <TextBlock Text="Custom effects can now flow through Avalonia's existing EffectConverter and Effect.Parse surface, so Visual.Effect also works from a compact string form."
+                       Foreground="#55666B"
+                       TextWrapping="Wrap" />
+            <Border CornerRadius="20"
+                    Padding="18"
+                    Background="#FFF7FBF1"
+                    Effect="tint(color=#0F9D8E, strength=0.55)">
+              <Grid RowDefinitions="Auto,Auto,Auto"
+                    RowSpacing="12">
+                <TextBlock Text="Parsed from attribute text"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           Foreground="#243033" />
+                <TextBlock Grid.Row="1"
+                           Text="The effect on this card comes from a single string: tint(color=#0F9D8E, strength=0.55)."
+                           Foreground="#55666B"
+                           TextWrapping="Wrap" />
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="10">
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#26007C70">
+                    <TextBlock Text="effect.parse" Foreground="#007C70" />
+                  </Border>
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#261E88E5">
+                    <TextBlock Text="string syntax" Foreground="#1E88E5" />
+                  </Border>
+                </StackPanel>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </Border>
+
+        <Border Grid.Column="1"
+                Padding="20"
+                CornerRadius="24"
+                Background="#FAFFFFFF"
+                BorderBrush="#22003845"
+                BorderThickness="1">
+          <StackPanel Spacing="14">
+            <TextBlock Text="Animated Custom Effect"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#1E2A2D" />
+            <TextBlock Text="This preview runs a looping keyframe animation on Border.Effect using custom GlowEffect values, which now flows through Avalonia's stock effect animation pipeline."
+                       Foreground="#55666B"
+                       TextWrapping="Wrap" />
+            <Border x:Name="AnimatedEffectPreview"
+                    CornerRadius="20"
+                    Padding="18"
+                    Background="#FFF4FBFE">
+              <Grid RowDefinitions="Auto,Auto,Auto"
+                    RowSpacing="12">
+                <TextBlock Text="Keyframe animation"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           Foreground="#243033" />
+                <TextBlock Grid.Row="1"
+                           Text="Glow radius, intensity, and color animate continuously on the same Visual.Effect property used by built-in effects."
+                           Foreground="#55666B"
+                           TextWrapping="Wrap" />
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="10">
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#26A86417">
+                    <TextBlock Text="animation" Foreground="#A86417" />
+                  </Border>
+                  <Border Padding="10,4"
+                          CornerRadius="999"
+                          Background="#266A3D74">
+                    <TextBlock Text="effect animator" Foreground="#6A3D74" />
+                  </Border>
+                </StackPanel>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </Border>
+      </Grid>
+
+      <Border Grid.Row="3"
+              Padding="20"
+              CornerRadius="24"
+              Background="#FAFFFFFF"
+              BorderBrush="#22003845"
+              BorderThickness="1">
+        <StackPanel Spacing="18">
+          <TextBlock Text="Code-Assigned Gallery"
+                     FontSize="22"
+                     FontWeight="SemiBold"
+                     Foreground="#1E2A2D" />
+          <TextBlock Text="Each section below assigns the custom effect in code, shows the same mixed bitmap and vector preview before and after, and exposes live controls for the effect parameters."
+                     Foreground="#55666B"
+                     TextWrapping="Wrap" />
+          <StackPanel x:Name="CodeGalleryHost" Spacing="18" />
+        </StackPanel>
+      </Border>
+    </Grid>
+  </ScrollViewer>
+</Window>
