@@ -1,0 +1,1839 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.VisualTree;
+using Effector.Sample.App;
+using Effector.Sample.Effects;
+using SkiaSharp;
+using Xunit;
+
+namespace Effector.Runtime.Tests;
+
+internal static class EffectorHeadlessTestAppBuilder
+{
+    public static AppBuilder BuildAvaloniaApp() =>
+        AppBuilder.Configure<App>()
+            .UseSkia()
+            .WithInterFont()
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions
+            {
+                UseHeadlessDrawing = false
+            });
+}
+
+public sealed class EffectorRuntimeBehaviorTests
+{
+    private static readonly HeadlessUnitTestSession Session = HeadlessUnitTestSession.StartNew(typeof(EffectorHeadlessTestAppBuilder));
+
+    private static void RunOnUiThread(Action action)
+    {
+        Session.Dispatch(action, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    private static TResult RunOnUiThread<TResult>(Func<TResult> action)
+    {
+        return Session.Dispatch(action, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    [Fact]
+    public void CustomEffects_AreAssignableTo_IEffect()
+    {
+        RunOnUiThread(() =>
+        {
+            Assert.IsAssignableFrom<IEffect>(new TintEffect());
+            Assert.IsAssignableFrom<IEffect>(new PixelateEffect());
+            Assert.IsAssignableFrom<IEffect>(new ScanlineShaderEffect());
+        });
+    }
+
+    [Fact]
+    public void ToImmutable_UsesGeneratedImmutableType_ForCustomEffects()
+    {
+        RunOnUiThread(() =>
+        {
+            var effect = new TintEffect
+            {
+                Color = Color.Parse("#0F9D8E"),
+                Strength = 0.55d
+            };
+
+            var immutable = EffectExtensions.ToImmutable(effect);
+
+            Assert.NotNull(immutable);
+            Assert.NotSame(effect, immutable);
+            Assert.Contains("__EffectorImmutable", immutable.GetType().Name, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void HostBounds_Updates_Propagate_From_Mutable_Effect_To_Frozen_Effect()
+    {
+        RunOnUiThread(() =>
+        {
+            var effect = new GridShaderEffect
+            {
+                CellSize = 16d,
+                Strength = 0.4d,
+                Color = Color.Parse("#00D9FF")
+            };
+
+            var host = new Border
+            {
+                Width = 120,
+                Height = 80,
+                Effect = effect
+            };
+
+            var canvas = new Canvas
+            {
+                Width = 320,
+                Height = 200,
+                Children = { host }
+            };
+
+            var window = new Window
+            {
+                Width = 320,
+                Height = 200,
+                Content = canvas
+            };
+
+            Canvas.SetLeft(host, 12d);
+            Canvas.SetTop(host, 18d);
+            window.Show();
+            window.UpdateLayout();
+
+            var immutable = EffectExtensions.ToImmutable(effect);
+
+            Canvas.SetLeft(host, 72d);
+            Canvas.SetTop(host, 44d);
+            window.UpdateLayout();
+
+            var updateMethod = typeof(EffectorRuntime).GetMethod(
+                "UpdateHostVisualBounds",
+                BindingFlags.Static | BindingFlags.NonPublic)!;
+            updateMethod.Invoke(null, new object[] { effect, host });
+
+            var tryGetBoundsMethod = typeof(EffectorRuntime).GetMethod(
+                "TryGetHostVisualBounds",
+                BindingFlags.Static | BindingFlags.NonPublic)!;
+            var args = new object?[] { immutable, null };
+            var success = (bool)tryGetBoundsMethod.Invoke(null, args)!;
+
+            Assert.True(success);
+
+            var storedBounds = Assert.IsType<Rect>(args[1]);
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            Assert.True(topLeft.HasValue);
+            Assert.True(Math.Abs(storedBounds.X - topLeft!.Value.X) <= 2d);
+            Assert.True(Math.Abs(storedBounds.Y - topLeft.Value.Y) <= 2d);
+        });
+    }
+
+    [Fact]
+    public void GetEffectOutputPadding_UsesCustomFactory_ForGlowEffect()
+    {
+        RunOnUiThread(() =>
+        {
+            var extensionsType = typeof(IEffect).Assembly.GetType("Avalonia.Media.EffectExtensions", throwOnError: true)!;
+            var getPadding = extensionsType.GetMethod(
+                "GetEffectOutputPadding",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                binder: null,
+                types: new[] { typeof(IEffect) },
+                modifiers: null)!;
+
+            var padding = (Thickness)getPadding.Invoke(null, new object?[]
+            {
+                new GlowEffect
+                {
+                    BlurRadius = 14d,
+                    Intensity = 0.9d
+                }
+            })!;
+
+            Assert.True(padding.Left > 0d);
+            Assert.True(padding.Top > 0d);
+            Assert.True(padding.Right > 0d);
+            Assert.True(padding.Bottom > 0d);
+        });
+    }
+
+    [Fact]
+    public void BuiltInEffects_StillUseAvaloniaBehavior()
+    {
+        RunOnUiThread(() =>
+        {
+            var immutable = EffectExtensions.ToImmutable(new BlurEffect { Radius = 8d });
+            Assert.Equal("ImmutableBlurEffect", immutable.GetType().Name);
+        });
+    }
+
+    [Fact]
+    public void GeneratedImmutableEquality_IsCallable_And_UsesEffectValues()
+    {
+        RunOnUiThread(() =>
+        {
+            var left = new TintEffect
+            {
+                Color = Color.Parse("#0F9D8E"),
+                Strength = 0.55d
+            };
+            var right = new TintEffect
+            {
+                Color = Color.Parse("#0F9D8E"),
+                Strength = 0.55d
+            };
+            var different = new TintEffect
+            {
+                Color = Color.Parse("#E96943"),
+                Strength = 0.55d
+            };
+
+            var immutable = EffectExtensions.ToImmutable(left);
+            var equalsMethod = immutable.GetType().GetMethod(nameof(IEquatable<IEffect>.Equals), new[] { typeof(IEffect) });
+
+            Assert.NotNull(equalsMethod);
+            Assert.True((bool)equalsMethod!.Invoke(immutable, new object[] { right })!);
+            Assert.False((bool)equalsMethod.Invoke(immutable, new object[] { different })!);
+        });
+    }
+
+    [Fact]
+    public async Task FrozenEffects_Are_RenderThreadSafe_ForEqualityPaddingAndFilter()
+    {
+        var frozen = RunOnUiThread(() => EffectExtensions.ToImmutable(new GlowEffect
+        {
+            Color = Color.Parse("#FFD54A"),
+            BlurRadius = 14d,
+            Intensity = 0.75d
+        }));
+
+        var equalFrozen = RunOnUiThread(() => EffectExtensions.ToImmutable(new GlowEffect
+        {
+            Color = Color.Parse("#FFD54A"),
+            BlurRadius = 14d,
+            Intensity = 0.75d
+        }));
+
+        var result = await Task.Run(() =>
+        {
+            var helperType = frozen.GetType().Assembly.GetType("Effector.Sample.Effects.GlowEffect__EffectorGenerated", throwOnError: true)!;
+            var getPadding = helperType.GetMethod("GetPadding", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var createFilter = helperType.GetMethod("CreateFilter", BindingFlags.Static | BindingFlags.NonPublic)!;
+
+            var equals = frozen.Equals(equalFrozen);
+            var padding = (Thickness)getPadding.Invoke(null, new object[] { frozen })!;
+            using var filter = (SKImageFilter?)createFilter.Invoke(null, new object[] { frozen, new SkiaEffectContext(1d, usesOpacitySaveLayer: false) });
+
+            return (equals, padding, hasFilter: filter is not null);
+        });
+
+        Assert.True(result.equals);
+        Assert.True(result.padding.Left > 0d);
+        Assert.True(result.padding.Top > 0d);
+        Assert.True(result.hasFilter);
+    }
+
+    [Fact]
+    public async Task FrozenShaderEffects_Are_RenderThreadSafe_ForShaderCreation()
+    {
+        var frozen = RunOnUiThread(() => EffectExtensions.ToImmutable(new SpotlightShaderEffect
+        {
+            CenterX = 0.6d,
+            CenterY = 0.35d,
+            Radius = 0.4d,
+            Strength = 0.55d,
+            Color = Color.Parse("#FFD26B")
+        }));
+
+        var created = await Task.Run(() =>
+        {
+            var helperType = frozen.GetType().Assembly.GetType("Effector.Sample.Effects.SpotlightShaderEffect__EffectorGenerated", throwOnError: true)!;
+            var createShader = helperType.GetMethod("CreateShaderEffect", BindingFlags.Static | BindingFlags.NonPublic)!;
+
+            using var surface = SKSurface.Create(new SKImageInfo(32, 32));
+            using var image = surface!.Snapshot();
+            var context = new SkiaShaderEffectContext(
+                new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+                image,
+                new SKRect(0, 0, 32, 32),
+                new SKRect(0, 0, 32, 32));
+
+            using var shader = (SkiaShaderEffect?)createShader.Invoke(null, new object[] { frozen, context });
+            return shader is not null;
+        });
+
+        Assert.True(created);
+    }
+
+    [Fact]
+    public void RuntimeShaderBuilder_Uses_LocalCoordinates_For_OffsetDestinationRect()
+    {
+        const string shaderSource =
+            """
+            uniform shader content;
+
+            half4 main(float2 coord) {
+                half4 base = content.eval(coord);
+                return coord.x < 12.0 ? half4(1.0, 0.0, 0.0, base.a) : base;
+            }
+            """;
+
+        using var surface = SKSurface.Create(new SKImageInfo(96, 64));
+        Assert.NotNull(surface);
+        using var snapshot = surface!.Snapshot();
+        var context = new SkiaShaderEffectContext(
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            snapshot,
+            new SKRect(0, 0, 96, 64),
+            new SKRect(40, 12, 88, 52));
+
+        using var shaderEffect = SkiaRuntimeShaderBuilder.Create(shaderSource, context, contentChildName: "content");
+
+        Assert.Equal(new SKRect(40, 12, 88, 52), shaderEffect.DestinationRect);
+        Assert.True(shaderEffect.LocalMatrix.HasValue);
+        Assert.Equal(-40f, shaderEffect.LocalMatrix!.Value.TransX);
+        Assert.Equal(-12f, shaderEffect.LocalMatrix!.Value.TransY);
+    }
+
+    [Fact]
+    public void ShaderBoundsSelection_Prefers_CurrentCompositorEffectRect_Over_RenderThreadFallback()
+    {
+        var selectMethod = typeof(EffectorRuntime).GetMethod(
+            "SelectAuthoritativeEffectRect",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var staleHostBounds = new Rect(0d, 0d, 120d, 84d);
+        var renderThreadBounds = new Rect(420d, 260d, 120d, 84d);
+        var compositorEffectRect = new Rect(0d, 0d, 1516d, 1200d);
+
+        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { compositorEffectRect, staleHostBounds, renderThreadBounds });
+
+        Assert.Equal(compositorEffectRect, selected);
+    }
+
+    [Fact]
+    public void ShaderBoundsSelection_Prefers_TightHostBounds_Inside_Oversized_RenderAndClipRects()
+    {
+        var selectMethod = typeof(EffectorRuntime).GetMethod(
+            "SelectAuthoritativeEffectRect",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var tightHostBounds = new Rect(824d, 897d, 692d, 303d);
+        var oversizedRenderBounds = new Rect(0d, 0d, 1516d, 1200d);
+        var oversizedClipRect = new Rect(0d, 0d, 1600d, 1200d);
+
+        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { oversizedClipRect, tightHostBounds, oversizedRenderBounds });
+
+        Assert.Equal(tightHostBounds, selected);
+    }
+
+    [Fact]
+    public void ShaderBoundsSelection_Prefers_HostBounds_Over_RenderThreadFallback_When_ClipRect_IsMissing()
+    {
+        var selectMethod = typeof(EffectorRuntime).GetMethod(
+            "SelectAuthoritativeEffectRect",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var staleHostBounds = new Rect(0d, 0d, 120d, 84d);
+        var renderThreadBounds = new Rect(420d, 260d, 120d, 84d);
+
+        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { null, staleHostBounds, renderThreadBounds });
+
+        Assert.Equal(staleHostBounds, selected);
+    }
+
+    [Fact]
+    public void ShaderIntermediateSurfaceBounds_Are_Derived_From_EffectBounds_Not_DeviceClip()
+    {
+        var resolveMethod = typeof(EffectorRuntime).GetMethod(
+            "ResolveIntermediateSurfaceBounds",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var effectBounds = new SKRect(824f, 897f, 1516f, 1200f);
+        var surfaceBounds = (SKRectI)resolveMethod.Invoke(null, new object[] { effectBounds })!;
+
+        Assert.Equal(824, surfaceBounds.Left);
+        Assert.Equal(897, surfaceBounds.Top);
+        Assert.Equal(1516, surfaceBounds.Right);
+        Assert.Equal(1200, surfaceBounds.Bottom);
+    }
+
+    [Fact]
+    public void ShaderHostBounds_Are_Converted_To_DeviceBounds_Using_Dpi()
+    {
+        var convertMethod = typeof(EffectorRuntime).GetMethod(
+            "ToDeviceRect",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var logicalBounds = new Rect(724d, 677d, 592d, 303d);
+        var deviceBounds = (SKRect)convertMethod.Invoke(null, new object[] { logicalBounds, new Vector(192d, 192d) })!;
+
+        Assert.Equal(1448f, deviceBounds.Left);
+        Assert.Equal(1354f, deviceBounds.Top);
+        Assert.Equal(2632f, deviceBounds.Right);
+        Assert.Equal(1960f, deviceBounds.Bottom);
+    }
+
+    [Fact]
+    public void SampleEffectsAssembly_ContainsGeneratedWovenTypes()
+    {
+        var assembly = typeof(TintEffect).Assembly;
+
+        Assert.NotNull(assembly.GetType("Effector.Sample.Effects.TintEffect__EffectorImmutable", throwOnError: false));
+        Assert.NotNull(assembly.GetType("Effector.Sample.Effects.TintEffect__EffectorGenerated", throwOnError: false));
+        Assert.NotNull(assembly.GetType("Effector.Sample.Effects.PixelateEffect__EffectorImmutable", throwOnError: false));
+    }
+
+    [Fact]
+    public void BurningFlameShaderEffect_RuntimeShader_Compiles()
+    {
+        RunOnUiThread(() =>
+        {
+            var effect = new BurningFlameShaderEffect
+            {
+                IgnitionX = 0.48d,
+                IgnitionY = 0.74d,
+                BurnAmount = 1d,
+                FlamePhase = 0.65d,
+                FlameHeight = 0.72d,
+                Distortion = 8d,
+                GlowStrength = 0.58d,
+                SmokeStrength = 0.24d,
+                CoreColor = Color.Parse("#FFD36B"),
+                EmberColor = Color.Parse("#FF5B1F")
+            };
+
+            using var surface = SKSurface.Create(new SKImageInfo(220, 72));
+            Assert.NotNull(surface);
+            surface!.Canvas.Clear(SKColors.White);
+
+            using var snapshot = surface.Snapshot();
+            var context = new SkiaShaderEffectContext(
+                new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+                snapshot,
+                new SKRect(0, 0, 220, 72),
+                new SKRect(0, 0, 220, 72));
+
+            using var shaderEffect = new BurningFlameShaderEffectFactory().CreateShaderEffect(effect, context);
+
+            Assert.NotNull(shaderEffect);
+            if (EffectorRuntime.DirectRuntimeShadersEnabled)
+            {
+                Assert.NotNull(shaderEffect!.Shader);
+            }
+            else
+            {
+                Assert.Null(shaderEffect!.Shader);
+                Assert.NotNull(shaderEffect.FallbackRenderer);
+            }
+        });
+    }
+
+    [Fact]
+    public void DirectRuntimeShaderPath_IsDisabledByDefault_On_SkiaSharp3()
+    {
+        var skiaVersion = typeof(SKRuntimeEffect).Assembly.GetName().Version;
+        Assert.NotNull(skiaVersion);
+
+        if (skiaVersion!.Major >= 3)
+        {
+            Assert.False(EffectorRuntime.DirectRuntimeShadersEnabledByDefault);
+            Assert.False(EffectorRuntime.DirectRuntimeShadersEnabled);
+        }
+    }
+
+    [Fact]
+    public void BurningFlameShaderEffect_RuntimeShaderSource_Compiles_When_Validated()
+    {
+        var field = typeof(BurningFlameShaderEffectFactory).GetField("ShaderSource", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+
+        var shaderSource = field!.GetValue(null) as string;
+        Assert.False(string.IsNullOrWhiteSpace(shaderSource));
+
+        using var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
+        Assert.NotNull(runtimeEffect);
+        Assert.Contains("content", runtimeEffect.Children);
+    }
+
+    [Fact]
+    public void ShaderBuilder_Uses_Fallback_When_DirectRuntimeShaders_Are_Disabled()
+    {
+        if (EffectorRuntime.DirectRuntimeShadersEnabled)
+        {
+            return;
+        }
+
+        using var surface = SKSurface.Create(new SKImageInfo(64, 48));
+        Assert.NotNull(surface);
+        using var snapshot = surface!.Snapshot();
+        var context = new SkiaShaderEffectContext(
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            snapshot,
+            new SKRect(0, 0, 64, 48),
+            new SKRect(0, 0, 64, 48));
+
+        using var shaderEffect = SkiaRuntimeShaderBuilder.Create(
+            "half4 main(float2 coord) { return half4(1.0, 0.0, 0.0, 1.0); }",
+            context,
+            fallbackRenderer: static (canvas, _, rect) =>
+            {
+                using var paint = new SKPaint { Color = SKColors.Red };
+                canvas.DrawRect(rect, paint);
+            });
+
+        Assert.NotNull(shaderEffect);
+        Assert.Null(shaderEffect.Shader);
+        Assert.NotNull(shaderEffect.FallbackRenderer);
+    }
+
+    [Fact]
+    public void CustomEffects_RaiseInvalidated_WhenAffectingPropertiesChange()
+    {
+        RunOnUiThread(() =>
+        {
+            var effect = new TintEffect();
+            var invalidatedCount = 0;
+
+            effect.Invalidated += (_, _) => invalidatedCount++;
+            effect.Strength = 0.75d;
+
+            Assert.True(invalidatedCount > 0);
+        });
+    }
+
+    [Fact]
+    public void EffectParse_UsesCustomEffectStringSyntax()
+    {
+        RunOnUiThread(() =>
+        {
+            var parsed = Effect.Parse("tint(color=#0F9D8E, strength=0.55)");
+
+            Assert.NotNull(parsed);
+            Assert.Contains("__EffectorImmutable", parsed.GetType().Name, StringComparison.Ordinal);
+            Assert.Equal(Color.Parse("#0F9D8E"), ReadProperty<Color>(parsed, "Color"));
+            Assert.Equal(0.55d, ReadProperty<double>(parsed, "Strength"), 6);
+        });
+    }
+
+    [Fact]
+    public void EffectTransition_InterpolatesCustomEffectProperties()
+    {
+        RunOnUiThread(() =>
+        {
+            var transition = new EffectTransition
+            {
+                Easing = new LinearEasing()
+            };
+            var doTransition = typeof(EffectTransition).GetMethod(
+                "DoTransition",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var progress = new ManualObservable<double>();
+            var results = new RecordingObserver<IEffect?>();
+
+            var observable = (IObservable<IEffect?>)doTransition.Invoke(
+                transition,
+                new object?[]
+                {
+                    progress,
+                    new TintEffect { Color = Color.Parse("#000000"), Strength = 0d },
+                    new TintEffect { Color = Color.Parse("#FFFFFF"), Strength = 1d }
+                })!;
+
+            using var subscription = observable.Subscribe(results);
+            progress.Publish(0.5d);
+            progress.Complete();
+
+            var value = Assert.Single(results.Values);
+            Assert.NotNull(value);
+            Assert.InRange(ReadProperty<double>(value!, "Strength"), 0.49d, 0.51d);
+
+            var color = ReadProperty<Color>(value!, "Color");
+            Assert.InRange(color.R, (byte)170, byte.MaxValue);
+            Assert.InRange(color.G, (byte)170, byte.MaxValue);
+            Assert.InRange(color.B, (byte)170, byte.MaxValue);
+        });
+    }
+
+    [Fact]
+    public void EffectAnimator_InterpolatesCustomEffects()
+    {
+        RunOnUiThread(() =>
+        {
+            var effectAnimatorType = typeof(Effect).Assembly.GetType("Avalonia.Animation.Animators.EffectAnimator", throwOnError: true)!;
+            var animator = Activator.CreateInstance(effectAnimatorType, nonPublic: true)!;
+            var interpolate = effectAnimatorType.GetMethod(
+                "Interpolate",
+                BindingFlags.Instance | BindingFlags.Public,
+                binder: null,
+                types: new[] { typeof(double), typeof(IEffect), typeof(IEffect) },
+                modifiers: null)!;
+
+            var value = (IEffect?)interpolate.Invoke(
+                animator,
+                new object?[]
+                {
+                    0.5d,
+                    new GlowEffect
+                    {
+                        BlurRadius = 4d,
+                        Intensity = 0.2d,
+                        Color = Color.Parse("#FFD54A")
+                    },
+                    new GlowEffect
+                    {
+                        BlurRadius = 20d,
+                        Intensity = 0.8d,
+                        Color = Color.Parse("#EB6A8E")
+                    }
+                });
+
+            Assert.NotNull(value);
+            Assert.InRange(ReadProperty<double>(value!, "BlurRadius"), 11.9d, 12.1d);
+            Assert.InRange(ReadProperty<double>(value!, "Intensity"), 0.49d, 0.51d);
+        });
+    }
+
+    [Fact]
+    public async Task MainWindow_Renders_And_SavesScreenshot()
+    {
+        await Session.Dispatch(() =>
+        {
+            var path = GetScreenshotPath("main-window.png");
+            var window = new MainWindow();
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            frame!.Save(path);
+
+            Assert.True(File.Exists(path));
+            Assert.True(new FileInfo(path).Length > 0);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task MainWindow_Scrolls_WhenMouseWheelOccursOverSlider()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 980,
+                Height = 720
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var scrollViewer = window.FindControl<ScrollViewer>("RootScrollViewer");
+            Assert.NotNull(scrollViewer);
+            Assert.True(scrollViewer!.Extent.Height > scrollViewer.Viewport.Height);
+
+            var slider = window.FindDescendantOfType<Slider>();
+            Assert.NotNull(slider);
+
+            slider!.BringIntoView();
+            window.UpdateLayout();
+
+            var point = slider.TranslatePoint(new Point(slider.Bounds.Width / 2d, slider.Bounds.Height / 2d), window);
+            Assert.True(point.HasValue);
+            Assert.InRange(point!.Value.Y, 0d, window.Bounds.Height);
+
+            var before = scrollViewer.Offset.Y;
+            window.MouseWheel(point.Value, new Vector(0, -2));
+            window.UpdateLayout();
+
+            Assert.True(scrollViewer.Offset.Y > before + 0.1d);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task MainWindow_ReflowsWithoutHorizontalOverflow_WhenNarrow()
+    {
+        await Session.Dispatch(() =>
+        {
+            var path = GetScreenshotPath("main-window-narrow.png");
+            var window = new MainWindow
+            {
+                Width = 920,
+                Height = 720
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var scrollViewer = window.FindControl<ScrollViewer>("RootScrollViewer");
+            var heroGrid = window.FindControl<Grid>("HeroContentGrid");
+            var featureRowOne = window.FindControl<Grid>("FeatureRowOneGrid");
+            var featureRowTwo = window.FindControl<Grid>("FeatureRowTwoGrid");
+
+            Assert.NotNull(scrollViewer);
+            Assert.NotNull(heroGrid);
+            Assert.NotNull(featureRowOne);
+            Assert.NotNull(featureRowTwo);
+
+            Assert.Single(heroGrid!.ColumnDefinitions);
+            Assert.Equal(2, heroGrid.RowDefinitions.Count);
+            Assert.Single(featureRowOne!.ColumnDefinitions);
+            Assert.Equal(2, featureRowOne.RowDefinitions.Count);
+            Assert.Single(featureRowTwo!.ColumnDefinitions);
+            Assert.Equal(2, featureRowTwo.RowDefinitions.Count);
+            Assert.True(scrollViewer!.Extent.Width <= scrollViewer.Viewport.Width + 1d);
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            frame!.Save(path);
+            Assert.True(File.Exists(path));
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task PixelateEffect_ChangesRenderedOutput()
+    {
+        await Session.Dispatch(() =>
+        {
+            var content = new Border
+            {
+                Width = 320,
+                Height = 220,
+                Background = Brushes.White,
+                Child = new Grid
+                {
+                    RowDefinitions = new RowDefinitions("Auto,*"),
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Pixelate",
+                            Margin = new Thickness(16),
+                            FontSize = 26,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = Brushes.Black
+                        },
+                        new Border
+                        {
+                            Background = new SolidColorBrush(Color.Parse("#1E88E5")),
+                            Margin = new Thickness(16),
+                            CornerRadius = new CornerRadius(18)
+                        }.WithRow(1)
+                    }
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 360,
+                Height = 260,
+                Content = content
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            content.Effect = new PixelateEffect { CellSize = 14d };
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            Assert.NotEqual(ComputeHash(baseline!), ComputeHash(effected!));
+
+            var path = GetScreenshotPath("pixelate.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            effected!.Save(path);
+            Assert.True(File.Exists(path));
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ShaderEffect_ChangesRenderedOutput()
+    {
+        await Session.Dispatch(() =>
+        {
+            var content = new Border
+            {
+                Width = 320,
+                Height = 220,
+                Background = Brushes.White,
+                Child = new Grid
+                {
+                    RowDefinitions = new RowDefinitions("Auto,*"),
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Shader",
+                            Margin = new Thickness(16),
+                            FontSize = 26,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = Brushes.Black
+                        },
+                        new Border
+                        {
+                            Background = new SolidColorBrush(Color.Parse("#FF7043")),
+                            Margin = new Thickness(16),
+                            CornerRadius = new CornerRadius(18)
+                        }.WithRow(1)
+                    }
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 360,
+                Height = 260,
+                Content = content
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            content.Effect = new SpotlightShaderEffect
+            {
+                CenterX = 0.62d,
+                CenterY = 0.34d,
+                Radius = 0.46d,
+                Strength = 0.65d,
+                Color = Color.Parse("#FFD26B")
+            };
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            Assert.NotEqual(ComputeHash(baseline!), ComputeHash(effected!));
+
+            var path = GetScreenshotPath("shader-spotlight.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            effected!.Save(path);
+            Assert.True(File.Exists(path));
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GridShaderEffect_Preserves_Base_Content_And_Adds_Overlay()
+    {
+        await Session.Dispatch(() =>
+        {
+            var host = new Border
+            {
+                Width = 96,
+                Height = 96,
+                Background = new SolidColorBrush(Color.Parse("#FF7043"))
+            };
+
+            var window = new Window
+            {
+                Width = 220,
+                Height = 200,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            Canvas.SetLeft(host, 40d);
+            Canvas.SetTop(host, 30d);
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            host.Effect = new GridShaderEffect
+            {
+                CellSize = 12d,
+                Strength = 0.8d,
+                Color = Color.Parse("#00D9FF")
+            };
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            var hostOrigin = host.TranslatePoint(new Point(0, 0), window);
+            Assert.True(hostOrigin.HasValue);
+
+            var linePixel = GetPixel(effected!, (int)Math.Round(hostOrigin!.Value.X) + 12, (int)Math.Round(hostOrigin.Value.Y) + 18);
+            var baselineLinePixel = GetPixel(baseline!, (int)Math.Round(hostOrigin.Value.X) + 12, (int)Math.Round(hostOrigin.Value.Y) + 18);
+            var offPixel = GetPixel(effected, (int)Math.Round(hostOrigin.Value.X) + 18, (int)Math.Round(hostOrigin.Value.Y) + 18);
+
+            Assert.NotEqual(baselineLinePixel, linePixel);
+            Assert.True(offPixel.Red > 180);
+            Assert.True(offPixel.Green > 70);
+            Assert.True(offPixel.Blue < 120);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ScanlineShaderEffect_Preserves_Base_Content_And_Adds_Bands()
+    {
+        await Session.Dispatch(() =>
+        {
+            var host = new Border
+            {
+                Width = 120,
+                Height = 84,
+                Background = new SolidColorBrush(Color.Parse("#FF7043"))
+            };
+
+            var window = new Window
+            {
+                Width = 240,
+                Height = 180,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            Canvas.SetLeft(host, 40d);
+            Canvas.SetTop(host, 30d);
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            host.Effect = new ScanlineShaderEffect
+            {
+                Spacing = 8d,
+                Strength = 0.65d
+            };
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            var hostOrigin = host.TranslatePoint(new Point(0, 0), window);
+            Assert.True(hostOrigin.HasValue);
+
+            var darkBandPixel = GetPixel(effected!, (int)Math.Round(hostOrigin!.Value.X) + 20, (int)Math.Round(hostOrigin.Value.Y) + 14);
+            var baseBandPixel = GetPixel(baseline!, (int)Math.Round(hostOrigin.Value.X) + 20, (int)Math.Round(hostOrigin.Value.Y) + 14);
+            var clearPixel = GetPixel(effected, (int)Math.Round(hostOrigin.Value.X) + 20, (int)Math.Round(hostOrigin.Value.Y) + 2);
+
+            Assert.True(darkBandPixel.Red < baseBandPixel.Red);
+            Assert.True(darkBandPixel.Green < baseBandPixel.Green);
+            Assert.True(clearPixel.Red > 180);
+            Assert.True(clearPixel.Green > 70);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ShaderEffect_IsClipped_To_EffectedVisualBounds()
+    {
+        await Session.Dispatch(() =>
+        {
+            var host = new Border
+            {
+                Width = 120,
+                Height = 120,
+                Background = Brushes.White,
+                Effect = new GridShaderEffect
+                {
+                    CellSize = 8d,
+                    Strength = 0.8d,
+                    Color = Color.Parse("#00D9FF")
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 280,
+                Height = 240,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            Canvas.SetLeft(host, 100d);
+            Canvas.SetTop(host, 80d);
+
+            window.Show();
+            window.UpdateLayout();
+            EffectorRuntime.ClearShaderDebugInfo();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            var outside = GetPixel(frame!, 16, 16);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(GridShaderEffect), out var debugInfo));
+
+            Assert.Equal(SKColors.White, outside);
+            Assert.InRange(debugInfo.IntermediateSurfaceBounds.Width, 119, 121);
+            Assert.InRange(debugInfo.IntermediateSurfaceBounds.Height, 119, 121);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_GridShaderEffect_UsesHostBounds_And_DoesNotLeakAbovePreview()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1600,
+                Height = 1200
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => grid.Effect is GridShaderEffect);
+            Assert.NotNull(host);
+            Assert.IsType<GridShaderEffect>(host!.Effect);
+            host.BringIntoView();
+            window.UpdateLayout();
+            EffectorRuntime.ClearShaderDebugInfo();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(GridShaderEffect), out var debugInfo));
+
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            var bottomRight = host.TranslatePoint(new Point(host.Bounds.Width, host.Bounds.Height), window);
+            Assert.True(topLeft.HasValue);
+            Assert.True(bottomRight.HasValue);
+
+            var expectedBounds = new SKRect(
+                (float)topLeft!.Value.X,
+                (float)topLeft.Value.Y,
+                (float)bottomRight!.Value.X,
+                (float)bottomRight.Value.Y);
+            var parent = host.Parent as Visual;
+            var parentBounds = parent?.Bounds;
+
+            var boundsMessage =
+                $"actual={debugInfo.EffectBounds.Left},{debugInfo.EffectBounds.Top},{debugInfo.EffectBounds.Right},{debugInfo.EffectBounds.Bottom}; " +
+                $"expected={expectedBounds.Left},{expectedBounds.Top},{expectedBounds.Right},{expectedBounds.Bottom}; " +
+                $"clip={debugInfo.DeviceClipBounds.Left},{debugInfo.DeviceClipBounds.Top},{debugInfo.DeviceClipBounds.Right},{debugInfo.DeviceClipBounds.Bottom}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"raw={(debugInfo.RawEffectRect.HasValue ? $"{debugInfo.RawEffectRect.Value.Left},{debugInfo.RawEffectRect.Value.Top},{debugInfo.RawEffectRect.Value.Right},{debugInfo.RawEffectRect.Value.Bottom}" : "null")}; " +
+                $"usedRenderThreadBounds={debugInfo.UsedRenderThreadBounds}; " +
+                $"matrix={debugInfo.TotalMatrix.ScaleX},{debugInfo.TotalMatrix.SkewX},{debugInfo.TotalMatrix.TransX},{debugInfo.TotalMatrix.SkewY},{debugInfo.TotalMatrix.ScaleY},{debugInfo.TotalMatrix.TransY}; " +
+                $"hostBounds={host.Bounds.X},{host.Bounds.Y},{host.Bounds.Width},{host.Bounds.Height}; " +
+                $"parent={parent?.GetType().Name ?? "null"}; " +
+                $"parentBounds={(parentBounds.HasValue ? $"{parentBounds.Value.X},{parentBounds.Value.Y},{parentBounds.Value.Width},{parentBounds.Value.Height}" : "null")}";
+
+            var captureBounds = debugInfo.RawEffectRect ?? debugInfo.EffectBounds;
+            Assert.True(Math.Abs(captureBounds.Left - expectedBounds.Left) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Top - expectedBounds.Top) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Right - expectedBounds.Right) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Bottom - expectedBounds.Bottom) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(debugInfo.IntermediateSurfaceBounds.Width - host.Bounds.Width) <= 6d, boundsMessage);
+            Assert.True(Math.Abs(debugInfo.IntermediateSurfaceBounds.Height - host.Bounds.Height) <= 6d, boundsMessage);
+
+            var sampleX = Math.Max(0, (int)Math.Round(expectedBounds.Left) + 1);
+            var sampleY = Math.Max(0, (int)Math.Round(expectedBounds.Top) - 12);
+            var outsidePixel = GetPixel(frame!, sampleX, sampleY);
+
+            Assert.True(outsidePixel.Red > 220);
+            Assert.True(outsidePixel.Green > 220);
+            Assert.True(outsidePixel.Blue > 220);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_ScanlineShaderEffect_AfterPreview_IsNotBlank()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1600,
+                Height = 1200
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => grid.Effect is ScanlineShaderEffect);
+            Assert.NotNull(host);
+
+            host!.BringIntoView();
+            window.UpdateLayout();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            var bottomRight = host.TranslatePoint(new Point(host.Bounds.Width, host.Bounds.Height), window);
+            Assert.True(topLeft.HasValue);
+            Assert.True(bottomRight.HasValue);
+
+            var sampleX = (int)Math.Round(topLeft!.Value.X + (host.Bounds.Width * 0.18d));
+            var sampleY = (int)Math.Round(topLeft.Value.Y + (host.Bounds.Height * 0.28d));
+            var pixel = GetPixel(frame!, sampleX, sampleY);
+
+            Assert.True(
+                pixel.Red < 245 || pixel.Green < 245 || pixel.Blue < 245,
+                $"Expected preview content at {sampleX},{sampleY}, but sampled near-blank pixel {pixel.Red},{pixel.Green},{pixel.Blue}.");
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_ScanlineShaderEffect_IsAligned_To_AfterPreviewBounds()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1600,
+                Height = 1200
+            };
+
+            window.Show();
+            window.UpdateLayout();
+            EffectorRuntime.ClearShaderDebugInfo();
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => grid.Effect is ScanlineShaderEffect);
+            Assert.NotNull(host);
+
+            host!.BringIntoView();
+            window.UpdateLayout();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(ScanlineShaderEffect), out var debugInfo));
+
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            var bottomRight = host.TranslatePoint(new Point(host.Bounds.Width, host.Bounds.Height), window);
+            Assert.True(topLeft.HasValue);
+            Assert.True(bottomRight.HasValue);
+
+            var expectedBounds = new SKRect(
+                (float)topLeft!.Value.X,
+                (float)topLeft.Value.Y,
+                (float)bottomRight!.Value.X,
+                (float)bottomRight.Value.Y);
+
+            var captureBounds = debugInfo.RawEffectRect ?? debugInfo.EffectBounds;
+            var boundsMessage =
+                $"actual={captureBounds.Left},{captureBounds.Top},{captureBounds.Right},{captureBounds.Bottom}; " +
+                $"expected={expectedBounds.Left},{expectedBounds.Top},{expectedBounds.Right},{expectedBounds.Bottom}; " +
+                $"clip={debugInfo.DeviceClipBounds.Left},{debugInfo.DeviceClipBounds.Top},{debugInfo.DeviceClipBounds.Right},{debugInfo.DeviceClipBounds.Bottom}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"usedRenderThreadBounds={debugInfo.UsedRenderThreadBounds}; " +
+                $"matrix={debugInfo.TotalMatrix.ScaleX},{debugInfo.TotalMatrix.SkewX},{debugInfo.TotalMatrix.TransX},{debugInfo.TotalMatrix.SkewY},{debugInfo.TotalMatrix.ScaleY},{debugInfo.TotalMatrix.TransY}";
+
+            Assert.True(Math.Abs(captureBounds.Left - expectedBounds.Left) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Top - expectedBounds.Top) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Right - expectedBounds.Right) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Bottom - expectedBounds.Bottom) <= 3f, boundsMessage);
+
+            var outsideX = Math.Max(0, (int)Math.Round(expectedBounds.Left + (host.Bounds.Width * 0.18d)));
+            var outsideY = Math.Max(0, (int)Math.Round(expectedBounds.Top) - 12);
+            var outsidePixel = GetPixel(frame!, outsideX, outsideY);
+            Assert.True(
+                outsidePixel.Red > 220 && outsidePixel.Green > 220 && outsidePixel.Blue > 220,
+                $"Expected no shader content above the scanline host at {outsideX},{outsideY}, but sampled {outsidePixel.Red},{outsidePixel.Green},{outsidePixel.Blue}. {boundsMessage}");
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_ScanlineShaderEffect_Host_Remains_Inside_TaggedTile_And_Section()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1600,
+                Height = 1200
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => string.Equals(grid.Tag as string, "Shader Scanlines::After", StringComparison.Ordinal));
+            Assert.NotNull(host);
+
+            var tile = host!.GetVisualAncestors()
+                .OfType<Border>()
+                .FirstOrDefault(static border => string.Equals(border.Tag as string, "Shader Scanlines::After::Tile", StringComparison.Ordinal));
+            Assert.NotNull(tile);
+
+            var section = host.GetVisualAncestors()
+                .OfType<Border>()
+                .FirstOrDefault(static border => string.Equals(border.Tag as string, "Shader Scanlines::Section", StringComparison.Ordinal));
+            Assert.NotNull(section);
+
+            var hostTopLeft = host.TranslatePoint(default, window);
+            var tileTopLeft = tile!.TranslatePoint(default, window);
+            var sectionTopLeft = section!.TranslatePoint(default, window);
+            Assert.True(hostTopLeft.HasValue);
+            Assert.True(tileTopLeft.HasValue);
+            Assert.True(sectionTopLeft.HasValue);
+
+            var hostBounds = new Rect(hostTopLeft!.Value, host.Bounds.Size);
+            var tileBounds = new Rect(tileTopLeft!.Value, tile.Bounds.Size);
+            var sectionBounds = new Rect(sectionTopLeft!.Value, section.Bounds.Size);
+
+            Assert.True(tileBounds.Contains(hostBounds.TopLeft));
+            Assert.True(tileBounds.Contains(hostBounds.BottomRight));
+            Assert.True(sectionBounds.Contains(tileBounds.TopLeft));
+            Assert.True(sectionBounds.Contains(tileBounds.BottomRight));
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_ScanlineShaderEffect_RemainsVisible_AfterScrollOffset()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1280,
+                Height = 760
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var scrollViewer = window.FindControl<ScrollViewer>("RootScrollViewer");
+            Assert.NotNull(scrollViewer);
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => grid.Effect is ScanlineShaderEffect);
+            Assert.NotNull(host);
+
+            var hostPoint = host!.TranslatePoint(new Point(0, 0), scrollViewer!);
+            Assert.True(hostPoint.HasValue);
+            var targetOffset = Math.Max(120d, hostPoint!.Value.Y - 72d);
+            scrollViewer!.Offset = new Vector(scrollViewer.Offset.X, targetOffset);
+            window.UpdateLayout();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            Assert.True(topLeft.HasValue);
+
+            var sampleX = (int)Math.Round(topLeft!.Value.X + (host.Bounds.Width * 0.18d));
+            var sampleY = (int)Math.Round(topLeft.Value.Y + (host.Bounds.Height * 0.28d));
+            var pixel = GetPixel(frame!, sampleX, sampleY);
+
+            Assert.True(
+                pixel.Red < 245 || pixel.Green < 245 || pixel.Blue < 245,
+                $"Expected scrolled shader preview content at {sampleX},{sampleY}, but sampled near-blank pixel {pixel.Red},{pixel.Green},{pixel.Blue} with offset {scrollViewer.Offset.Y:0.##}.");
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_ScanlineShaderEffect_StaysAligned_AfterScrollOffset()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1280,
+                Height = 760
+            };
+
+            window.Show();
+            window.UpdateLayout();
+            EffectorRuntime.ClearShaderDebugInfo();
+
+            var scrollViewer = window.FindControl<ScrollViewer>("RootScrollViewer");
+            Assert.NotNull(scrollViewer);
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => grid.Effect is ScanlineShaderEffect);
+            Assert.NotNull(host);
+
+            var hostPoint = host!.TranslatePoint(new Point(0, 0), scrollViewer!);
+            Assert.True(hostPoint.HasValue);
+            var targetOffset = Math.Max(120d, hostPoint!.Value.Y - 72d);
+            scrollViewer!.Offset = new Vector(scrollViewer.Offset.X, targetOffset);
+            window.UpdateLayout();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(ScanlineShaderEffect), out var debugInfo));
+
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            var bottomRight = host.TranslatePoint(new Point(host.Bounds.Width, host.Bounds.Height), window);
+            Assert.True(topLeft.HasValue);
+            Assert.True(bottomRight.HasValue);
+
+            var expectedBounds = new SKRect(
+                (float)topLeft!.Value.X,
+                (float)topLeft.Value.Y,
+                (float)bottomRight!.Value.X,
+                (float)bottomRight.Value.Y);
+
+            var captureBounds = debugInfo.RawEffectRect ?? debugInfo.EffectBounds;
+            var boundsMessage =
+                $"actual={captureBounds.Left},{captureBounds.Top},{captureBounds.Right},{captureBounds.Bottom}; " +
+                $"expected={expectedBounds.Left},{expectedBounds.Top},{expectedBounds.Right},{expectedBounds.Bottom}; " +
+                $"clip={debugInfo.DeviceClipBounds.Left},{debugInfo.DeviceClipBounds.Top},{debugInfo.DeviceClipBounds.Right},{debugInfo.DeviceClipBounds.Bottom}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"usedRenderThreadBounds={debugInfo.UsedRenderThreadBounds}; " +
+                $"scrollY={scrollViewer.Offset.Y:0.##}";
+
+            Assert.True(Math.Abs(captureBounds.Left - expectedBounds.Left) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Top - expectedBounds.Top) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Right - expectedBounds.Right) <= 3f, boundsMessage);
+            Assert.True(Math.Abs(captureBounds.Bottom - expectedBounds.Bottom) <= 3f, boundsMessage);
+
+            var outsideX = Math.Max(0, (int)Math.Round(expectedBounds.Left + (host.Bounds.Width * 0.18d)));
+            var outsideY = Math.Max(0, (int)Math.Round(expectedBounds.Top) - 12);
+            var outsidePixel = GetPixel(frame!, outsideX, outsideY);
+            Assert.True(
+                outsidePixel.Red > 220 && outsidePixel.Green > 220 && outsidePixel.Blue > 220,
+                $"Expected no shader content above the scrolled scanline host at {outsideX},{outsideY}, but sampled {outsidePixel.Red},{outsidePixel.Green},{outsidePixel.Blue}. {boundsMessage}");
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task InteractiveShaderEffect_RespondsToPointerInput_And_Rerenders()
+    {
+        await Session.Dispatch(() =>
+        {
+            var effect = new PointerSpotlightShaderEffect
+            {
+                Radius = 0.24d,
+                Strength = 0.3d,
+                PressBoost = 0.42d,
+                Color = Color.Parse("#FFD26B")
+            };
+
+            var host = new Border
+            {
+                Width = 240,
+                Height = 180,
+                Margin = new Thickness(20),
+                Background = Brushes.White,
+                Effect = effect,
+                Child = new Grid
+                {
+                    RowDefinitions = new RowDefinitions("Auto,*"),
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Interactive",
+                            Margin = new Thickness(16),
+                            FontSize = 26,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = Brushes.Black
+                        },
+                        new Border
+                        {
+                            Background = new SolidColorBrush(Color.Parse("#4FC3F7")),
+                            Margin = new Thickness(16),
+                            CornerRadius = new CornerRadius(18)
+                        }.WithRow(1)
+                    }
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 360,
+                Height = 260,
+                Content = new Grid
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            window.MouseMove(new Point(110, 95));
+            using var hover = window.CaptureRenderedFrame();
+            Assert.NotNull(hover);
+
+            Assert.True(effect.IsPointerOver);
+            Assert.False(effect.IsPressed);
+            Assert.InRange(effect.PointerX, 0.18d, 0.24d);
+            Assert.InRange(effect.PointerY, 0.28d, 0.34d);
+            Assert.NotEqual(ComputeHash(baseline!), ComputeHash(hover!));
+
+            window.MouseDown(new Point(110, 95), MouseButton.Left);
+            using var pressed = window.CaptureRenderedFrame();
+            Assert.NotNull(pressed);
+
+            Assert.True(effect.IsPressed);
+            Assert.NotEqual(ComputeHash(hover!), ComputeHash(pressed!));
+
+            window.MouseUp(new Point(110, 95), MouseButton.Left);
+            using var released = window.CaptureRenderedFrame();
+            Assert.NotNull(released);
+
+            Assert.True(effect.IsPointerOver);
+            Assert.False(effect.IsPressed);
+            Assert.Equal(ComputeHash(hover!), ComputeHash(released!));
+
+            window.MouseMove(new Point(320, 220));
+            using var exited = window.CaptureRenderedFrame();
+            Assert.NotNull(exited);
+
+            Assert.False(effect.IsPointerOver);
+            Assert.False(effect.IsPressed);
+            Assert.NotEqual(ComputeHash(hover!), ComputeHash(exited!));
+
+            var path = GetScreenshotPath("shader-pointer-spotlight.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            exited!.Save(path);
+            Assert.True(File.Exists(path));
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task WaterRippleShaderEffect_RespondsToPointerInput_And_Animates()
+    {
+        Window? window = null;
+        WaterRippleShaderEffect? effect = null;
+        double pressedAge = 0d;
+
+        await Session.Dispatch(() =>
+        {
+            effect = new WaterRippleShaderEffect
+            {
+                Distortion = 12d,
+                MaxRadius = 0.72d,
+                RingWidth = 0.065d,
+                TintStrength = 0.18d,
+                Color = Color.Parse("#7FD6FF")
+            };
+
+            var host = new Border
+            {
+                Width = 260,
+                Height = 180,
+                Margin = new Thickness(20),
+                Background = Brushes.White,
+                Effect = effect,
+                Child = new Grid
+                {
+                    RowDefinitions = new RowDefinitions("Auto,*"),
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Harbor Flood Sensor",
+                            Margin = new Thickness(16, 14, 16, 0),
+                            FontSize = 24,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = Brushes.Black
+                        },
+                        new Border
+                        {
+                            Margin = new Thickness(16),
+                            CornerRadius = new CornerRadius(18),
+                            Background = new LinearGradientBrush
+                            {
+                                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                                EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative),
+                                GradientStops = new GradientStops
+                                {
+                                    new GradientStop(Color.Parse("#C5EEFF"), 0d),
+                                    new GradientStop(Color.Parse("#4CA9D9"), 0.5d),
+                                    new GradientStop(Color.Parse("#164F77"), 1d)
+                                }
+                            }
+                        }.WithRow(1)
+                    }
+                }
+            };
+
+            window = new Window
+            {
+                Width = 400,
+                Height = 280,
+                Content = new Grid
+                {
+                    Background = Brushes.White,
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            window.MouseMove(new Point(140, 110));
+            Assert.True(effect!.IsPointerOver);
+            Assert.False(effect.IsPressed);
+            Assert.InRange(effect.PointerX, 0.22d, 0.34d);
+            Assert.InRange(effect.PointerY, 0.32d, 0.46d);
+
+            window.MouseDown(new Point(140, 110), MouseButton.Left);
+            Assert.True(effect.IsPressed);
+            Assert.True(effect.PrimaryRipple.IsActive);
+            pressedAge = effect.PrimaryRipple.Age;
+        }, CancellationToken.None);
+
+        await Task.Delay(140);
+
+        await Session.Dispatch(() =>
+        {
+            Assert.NotNull(window);
+            Assert.NotNull(effect);
+
+            window!.UpdateLayout();
+            var onAnimationTick = effect!.GetType().GetMethod("OnAnimationTick", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(onAnimationTick);
+            onAnimationTick!.Invoke(effect, new object?[] { null, EventArgs.Empty });
+
+            using var animated = window.CaptureRenderedFrame();
+            Assert.NotNull(animated);
+
+            Assert.True(effect.PrimaryRipple.IsActive);
+            Assert.True(effect.PrimaryRipple.Age > pressedAge);
+
+            window.MouseUp(new Point(140, 110), MouseButton.Left);
+            using var released = window.CaptureRenderedFrame();
+            Assert.NotNull(released);
+
+            Assert.True(effect.IsPointerOver);
+            Assert.False(effect.IsPressed);
+            Assert.True(effect.PrimaryRipple.IsActive);
+
+            var path = GetScreenshotPath("shader-water-ripple.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            animated!.Save(path);
+            Assert.True(File.Exists(path));
+
+            window.Close();
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task BurningFlameShaderEffect_RespondsToClick_And_Cools()
+    {
+        Window? window = null;
+        BurningFlameShaderEffect? effect = null;
+        double startingPhase = 0d;
+
+        await Session.Dispatch(() =>
+        {
+            effect = new BurningFlameShaderEffect
+            {
+                FlameHeight = 0.72d,
+                Distortion = 8d,
+                GlowStrength = 0.58d,
+                SmokeStrength = 0.24d,
+                CoreColor = Color.Parse("#FFD36B"),
+                EmberColor = Color.Parse("#FF5B1F")
+            };
+
+            var button = new Button
+            {
+                Width = 220,
+                Height = 72,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top,
+                Margin = new Thickness(40),
+                Background = new SolidColorBrush(Color.Parse("#1E2328")),
+                Foreground = Brushes.White,
+                Effect = effect,
+                Content = "Deploy Emergency Patch"
+            };
+
+            window = new Window
+            {
+                Width = 360,
+                Height = 220,
+                Content = new Grid
+                {
+                    Background = Brushes.White,
+                    Children =
+                    {
+                        button
+                    }
+                }
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            window.MouseDown(new Point(120, 82), MouseButton.Left);
+            window.MouseUp(new Point(120, 82), MouseButton.Left);
+
+            Assert.NotNull(effect);
+            Assert.False(effect!.IsPressed);
+            Assert.True(effect.BurnAmount > 0.9d);
+            Assert.InRange(effect.IgnitionX, 0.2d, 0.5d);
+            Assert.InRange(effect.IgnitionY, 0.3d, 0.8d);
+            startingPhase = effect.FlamePhase;
+        }, CancellationToken.None);
+
+        await Task.Delay(140);
+
+        await Session.Dispatch(() =>
+        {
+            Assert.NotNull(window);
+            Assert.NotNull(effect);
+
+            var onAnimationTick = effect!.GetType().GetMethod("OnAnimationTick", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(onAnimationTick);
+            onAnimationTick!.Invoke(effect, new object?[] { null, EventArgs.Empty });
+
+            window!.UpdateLayout();
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            Assert.True(effect.FlamePhase > startingPhase);
+            Assert.InRange(effect.BurnAmount, 0.01d, 0.99d);
+
+            var path = GetScreenshotPath("shader-burning-flame-button.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            frame!.Save(path);
+            Assert.True(File.Exists(path));
+
+            window.Close();
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task InteractiveEffects_Use_HostLocalPointerCoordinates()
+    {
+        await Session.Dispatch(() =>
+        {
+            var effect = new PointerSpotlightShaderEffect();
+            var host = new Border
+            {
+                Width = 200,
+                Height = 100,
+                Background = Brushes.White,
+                Effect = effect
+            };
+
+            var canvas = new Canvas();
+            canvas.Children.Add(host);
+            Canvas.SetLeft(host, 80d);
+            Canvas.SetTop(host, 40d);
+
+            var window = new Window
+            {
+                Width = 360,
+                Height = 240,
+                Content = canvas
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            window.MouseMove(new Point(130, 65));
+            window.UpdateLayout();
+
+            Assert.InRange(effect.PointerX, 0.24d, 0.26d);
+            Assert.InRange(effect.PointerY, 0.24d, 0.26d);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task InteractiveEffects_Normalize_To_VisibleContentBounds_For_TransparentContainerHosts()
+    {
+        await Session.Dispatch(() =>
+        {
+            var effect = new PointerSpotlightShaderEffect();
+            var host = new Canvas
+            {
+                Width = 300,
+                Height = 200,
+                Effect = effect
+            };
+
+            var content = new Border
+            {
+                Width = 80,
+                Height = 60,
+                Background = Brushes.White
+            };
+            Canvas.SetLeft(content, 120d);
+            Canvas.SetTop(content, 40d);
+            host.Children.Add(content);
+
+            var root = new Grid();
+            root.Children.Add(host);
+
+            var window = new Window
+            {
+                Width = 420,
+                Height = 300,
+                Content = root
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var topLeft = content.TranslatePoint(default, window);
+            Assert.True(topLeft.HasValue);
+            var pointer = new Point(topLeft!.Value.X + 40d, topLeft.Value.Y + 30d);
+
+            window.MouseMove(pointer);
+            window.UpdateLayout();
+
+            Assert.InRange(effect.PointerX, 0.49d, 0.51d);
+            Assert.InRange(effect.PointerY, 0.49d, 0.51d);
+        }, CancellationToken.None);
+    }
+
+    private static string ComputeHash(Avalonia.Media.Imaging.Bitmap bitmap)
+    {
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        stream.Position = 0;
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
+    }
+
+    private static SKColor GetPixel(Avalonia.Media.Imaging.Bitmap bitmap, int x, int y)
+    {
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        stream.Position = 0;
+        using var skBitmap = SKBitmap.Decode(stream);
+        Assert.NotNull(skBitmap);
+        return skBitmap!.GetPixel(x, y);
+    }
+
+    private static T ReadProperty<T>(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.NotNull(property);
+        return (T)property!.GetValue(instance)!;
+    }
+
+    private static string GetScreenshotPath(string fileName)
+    {
+        var root = Environment.GetEnvironmentVariable("AVALONIA_SCREENSHOT_DIR");
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../artifacts/headless-screenshots"));
+        }
+
+        return Path.Combine(root, fileName);
+    }
+}
+
+internal static class TestControlExtensions
+{
+    public static T WithRow<T>(this T control, int row)
+        where T : Control
+    {
+        Grid.SetRow(control, row);
+        return control;
+    }
+}
+
+internal sealed class ManualObservable<T> : IObservable<T>
+{
+    private IObserver<T>? _observer;
+
+    public IDisposable Subscribe(IObserver<T> observer)
+    {
+        _observer = observer;
+        return new Subscription(this);
+    }
+
+    public void Publish(T value)
+    {
+        _observer?.OnNext(value);
+    }
+
+    public void Complete()
+    {
+        _observer?.OnCompleted();
+    }
+
+    private sealed class Subscription : IDisposable
+    {
+        private readonly ManualObservable<T> _owner;
+
+        public Subscription(ManualObservable<T> owner)
+        {
+            _owner = owner;
+        }
+
+        public void Dispose()
+        {
+            _owner._observer = null;
+        }
+    }
+}
+
+internal sealed class RecordingObserver<T> : IObserver<T>
+{
+    public List<T> Values { get; } = new();
+
+    public void OnCompleted()
+    {
+    }
+
+    public void OnError(Exception error)
+    {
+        throw error;
+    }
+
+    public void OnNext(T value)
+    {
+        Values.Add(value);
+    }
+}
