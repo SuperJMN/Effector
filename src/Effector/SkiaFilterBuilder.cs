@@ -55,7 +55,14 @@ public static class SkiaFilterBuilder
             ? SKImageFilter.CreateErode(radiusX, radiusY)
             : SKImageFilter.CreateErode(radiusX, radiusY, input);
 
-    public static SKImageFilter Convolution(int width, int height, float[] kernel, float gain = 1f, float bias = 0f, SKImageFilter? input = null)
+    public static SKImageFilter Convolution(
+        int width,
+        int height,
+        float[] kernel,
+        float gain = 1f,
+        float bias = 0f,
+        bool convolveAlpha = true,
+        SKImageFilter? input = null)
     {
         if (kernel is null)
         {
@@ -71,8 +78,8 @@ public static class SkiaFilterBuilder
         var kernelOffset = new SKPointI(width / 2, height / 2);
 
         return input is null
-            ? SKImageFilter.CreateMatrixConvolution(size, kernel, gain, bias, kernelOffset, SKShaderTileMode.Clamp, convolveAlpha: true)
-            : SKImageFilter.CreateMatrixConvolution(size, kernel, gain, bias, kernelOffset, SKShaderTileMode.Clamp, convolveAlpha: true, input);
+            ? SKImageFilter.CreateMatrixConvolution(size, kernel, gain, bias, kernelOffset, SKShaderTileMode.Clamp, convolveAlpha: convolveAlpha)
+            : SKImageFilter.CreateMatrixConvolution(size, kernel, gain, bias, kernelOffset, SKShaderTileMode.Clamp, convolveAlpha: convolveAlpha, input);
     }
 
     public static SKImageFilter Compose(SKImageFilter outer, SKImageFilter inner)

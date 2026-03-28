@@ -439,6 +439,38 @@ public sealed class EffectorRuntimeBehaviorTests
         Assert.Equal((byte)0xFF, pixel.Alpha);
     }
 
+    [Fact]
+    public void EdgeDetectFilter_Preserves_Content_And_Draws_Opaque_Edges()
+    {
+        using var filter = new EdgeDetectEffectFactory().CreateFilter(
+            new object[] { 1d },
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false));
+
+        Assert.NotNull(filter);
+
+        using var bitmap = ApplyEffectFilterViaSaveLayer(
+            7,
+            7,
+            filter!,
+            static canvas =>
+            {
+                using var fill = new SKPaint { Color = SKColors.Black };
+                canvas.Clear(SKColors.White);
+                canvas.DrawRect(new SKRect(0, 0, 3, 7), fill);
+            });
+
+        var leftInterior = bitmap.GetPixel(1, 3);
+        var edgePixel = bitmap.GetPixel(3, 3);
+        var rightInterior = bitmap.GetPixel(5, 3);
+
+        Assert.True(leftInterior.Red < 10 && leftInterior.Green < 10 && leftInterior.Blue < 10);
+        Assert.True(edgePixel.Red < 20 && edgePixel.Green < 20 && edgePixel.Blue < 20);
+        Assert.True(rightInterior.Red > 240 && rightInterior.Green > 240 && rightInterior.Blue > 240);
+        Assert.Equal((byte)0xFF, leftInterior.Alpha);
+        Assert.Equal((byte)0xFF, edgePixel.Alpha);
+        Assert.Equal((byte)0xFF, rightInterior.Alpha);
+    }
+
     public void SampleEffectsAssembly_ContainsGeneratedWovenTypes()
     {
         var assembly = typeof(TintEffect).Assembly;
@@ -1207,6 +1239,44 @@ public sealed class EffectorRuntimeBehaviorTests
             Assert.False(
                 pixel.Red > 240 && pixel.Green > 240 && pixel.Blue > 240,
                 $"Expected partial invert preview content at {sampleX},{sampleY}, but sampled near-white pixel {pixel.Red},{pixel.Green},{pixel.Blue}.");
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SampleWindow_EdgeDetectEffect_AfterPreview_Preserves_Content()
+    {
+        await Session.Dispatch(() =>
+        {
+            var window = new MainWindow
+            {
+                Width = 1600,
+                Height = 1200
+            };
+
+            window.Show();
+            window.UpdateLayout();
+
+            var host = window.GetVisualDescendants()
+                .OfType<Grid>()
+                .FirstOrDefault(static grid => grid.Effect is EdgeDetectEffect);
+            Assert.NotNull(host);
+
+            host!.BringIntoView();
+            window.UpdateLayout();
+
+            using var frame = window.CaptureRenderedFrame();
+            Assert.NotNull(frame);
+
+            var topLeft = host.TranslatePoint(new Point(0, 0), window);
+            Assert.True(topLeft.HasValue);
+
+            var sampleX = (int)Math.Round(topLeft!.Value.X + (host.Bounds.Width * 0.18d));
+            var sampleY = (int)Math.Round(topLeft.Value.Y + (host.Bounds.Height * 0.22d));
+            var pixel = GetPixel(frame!, sampleX, sampleY);
+
+            Assert.False(
+                pixel.Red > 240 && pixel.Green > 240 && pixel.Blue > 240,
+                $"Expected edge-detect preview content at {sampleX},{sampleY}, but sampled near-white pixel {pixel.Red},{pixel.Green},{pixel.Blue}.");
         }, CancellationToken.None);
     }
 

@@ -180,6 +180,32 @@ public sealed class EdgeDetectEffectFactory : ISkiaEffectFactory<EdgeDetectEffec
             -strength, 8f * strength, -strength,
             -strength, -strength, -strength
         };
-        return SkiaFilterBuilder.Convolution(3, 3, kernel, gain: 1f, bias: 0f);
+
+        var grayscale = SkiaFilterBuilder.ColorFilter(
+            SKColorFilter.CreateColorMatrix(ColorMatrixBuilder.CreateGrayscale(1f)));
+        var edges = SkiaFilterBuilder.Convolution(
+            3,
+            3,
+            kernel,
+            gain: 1f,
+            bias: 0f,
+            convolveAlpha: false,
+            input: grayscale);
+
+        // Convert the grayscale edge response into an alpha-only black overlay,
+        // then composite it over the original source so flat regions stay intact.
+        var edgeOverlay = SkiaFilterBuilder.ColorFilter(
+            SKColorFilter.CreateColorMatrix(new[]
+            {
+                0f, 0f, 0f, 0f, 0f,
+                0f, 0f, 0f, 0f, 0f,
+                0f, 0f, 0f, 0f, 0f,
+                1f, 0f, 0f, 0f, 0f
+            }),
+            edges);
+
+        return SkiaFilterBuilder.Merge(
+            SkiaSampleEffectHelpers.IdentityFilter(),
+            edgeOverlay);
     }
 }
