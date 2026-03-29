@@ -1,36 +1,89 @@
 # Effector
 
-Effector adds user-defined Skia-backed effects to Avalonia 11.3.12 while preserving the public `Visual.Effect : IEffect?` contract.
+[![Build](https://img.shields.io/github/actions/workflow/status/wieslawsoltes/Effector/build.yml?branch=main&label=build)](https://github.com/wieslawsoltes/Effector/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/wieslawsoltes/Effector/release.yml?label=release)](https://github.com/wieslawsoltes/Effector/actions/workflows/release.yml)
 
-## What It Ships
+Effector brings extensible Skia-backed custom effects to Avalonia `11.3.12` while preserving the public `Visual.Effect : IEffect?` contract. It combines compile-time effect weaving, app-local Avalonia assembly patching, immutable render-thread snapshots, runtime shader support, input-driven effects, and NativeAOT-aware packaging.
 
-- `src/Effector`
-  Runtime library, public authoring API, NuGet packaging, and patched-Avalonia helper entry points.
-- `src/Effector.Build.Tasks`
-  Metadata scanner, Cecil-based weaver, MSBuild task.
-- `src/Effector.SelfWeaver`
-  Rewrites `Effector.dll` after build so `SkiaEffectBase` becomes a real `Avalonia.Media.Effect`.
-- `samples/Effector.Sample.Effects`
-  Reusable custom effects library.
-- `samples/Effector.Sample.App`
-  Gallery app showing tint, pixelate, grayscale, sepia, saturation, brightness/contrast, invert, glow, sharpen, edge detect, runtime shader overlays such as scanlines, grid, and spotlight, pointer-driven interactive shader effects, string syntax parsing, and custom effect animation.
-- `tests`
-  Build-task and runtime coverage.
+## Packages
 
-## Authoring Model
+| Package | Version | Downloads |
+| --- | --- | --- |
+| `Effector` | [![NuGet](https://img.shields.io/nuget/v/Effector.svg?label=NuGet)](https://www.nuget.org/packages/Effector/) | [![NuGet downloads](https://img.shields.io/nuget/dt/Effector.svg?label=Downloads)](https://www.nuget.org/packages/Effector/) |
 
-Package consumers define effects like this:
+## Highlights
+
+- Keep Avalonia's normal `Border.Effect`, `Image.Effect`, and `Visual.Effect` authoring model.
+- Define user effects in application or library projects with normal Avalonia properties.
+- Support typed Skia filter effects, runtime shader effects, and pointer-driven interactive effects.
+- Use build-time weaving and app-local Avalonia binary patching instead of runtime detours.
+- Work with animation, parsing, immutable snapshots, render-thread safety, and NativeAOT publish flows.
+- Ship a sample gallery with color, convolution, shader, interactive, and burn-away effect examples.
+
+## Compatibility
+
+- Avalonia: `11.3.12`
+- Renderer: `Avalonia.Skia`
+- Runtime targets:
+  - normal desktop JIT builds are supported
+  - NativeAOT publish is supported through the packaged MSBuild patching pipeline
+- Not targeted in this repository:
+  - arbitrary Avalonia versions outside `11.3.12`
+  - non-Skia renderers
+  - string parsers or transitions for effects not registered through Effector
+
+## How It Works
+
+Effector has three moving parts:
+
+1. Authoring API in `Effector.dll`
+   - public types such as `SkiaEffectBase`, `SkiaInteractiveEffectBase`, `SkiaEffectContext`, `SkiaShaderEffectContext`, `ISkiaEffectFactory<T>`, `ISkiaEffectValueFactory`, `ISkiaShaderEffectFactory<T>`, and `ISkiaShaderEffectValueFactory`
+2. Consumer assembly weaving
+   - after `CoreCompile`, Effector scans compiled metadata with `System.Reflection.Metadata` and rewrites matching effect types with Mono.Cecil
+   - it injects immutable helper types, render-safe snapshot accessors, and module registration
+3. App-local Avalonia patching
+   - after build and publish, Effector patches the local copies of `Avalonia.Base.dll` and `Avalonia.Skia.dll`
+   - Avalonia then calls `EffectorRuntime` directly for immutable conversion, padding, parsing, animation, render-thread transport, and Skia effect entry points
+
+This means consumers keep Avalonia's public contract, but the runtime path no longer depends on detour patching.
+
+## Install
+
+```bash
+dotnet add package Effector
+```
+
+Or:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Effector" Version="x.y.z" />
+</ItemGroup>
+```
+
+No theme include is required. Effector extends the effect pipeline rather than introducing visual styles.
+
+## Quick Start
+
+### 1. Define a mutable effect
 
 ```csharp
+using Avalonia;
+using Avalonia.Media;
+using Effector;
+
 [SkiaEffect(typeof(TintEffectFactory))]
 public sealed class TintEffect : SkiaEffectBase
 {
     public static readonly StyledProperty<Color> ColorProperty =
         AvaloniaProperty.Register<TintEffect, Color>(nameof(Color), Colors.DeepSkyBlue);
 
+    public static readonly StyledProperty<double> StrengthProperty =
+        AvaloniaProperty.Register<TintEffect, double>(nameof(Strength), 0.5d);
+
     static TintEffect()
     {
-        AffectsRender<TintEffect>(ColorProperty);
+        AffectsRender<TintEffect>(ColorProperty, StrengthProperty);
     }
 
     public Color Color
@@ -38,122 +91,307 @@ public sealed class TintEffect : SkiaEffectBase
         get => GetValue(ColorProperty);
         set => SetValue(ColorProperty, value);
     }
+
+    public double Strength
+    {
+        get => GetValue(StrengthProperty);
+        set => SetValue(StrengthProperty, value);
+    }
 }
 ```
 
-The package weaves the compiled consumer assembly, generates immutable helper types, registers the effect at module load, and then build-time patches the app-local `Avalonia.Base.dll` and `Avalonia.Skia.dll` copies so Avalonia calls `EffectorRuntime` directly for immutable conversion, padding, parsing, animation, render-thread effect transport, and Skia effect/shader entry points. No runtime detour patching is required.
+### 2. Implement the factory
 
-Render-thread execution uses the generated immutable snapshot only. Because Avalonia's render/composition side must not touch live `AvaloniaObject` instances, every custom factory is expected to implement the value-snapshot interfaces below in addition to the typed authoring interfaces:
+Effector requires render-thread-safe value factories so the immutable snapshot can be used without reconstructing live `AvaloniaObject` instances on the render thread.
 
 ```csharp
-public interface ISkiaEffectValueFactory
+using Avalonia;
+using Avalonia.Media;
+using Effector;
+using SkiaSharp;
+
+public sealed class TintEffectFactory :
+    ISkiaEffectFactory<TintEffect>,
+    ISkiaEffectValueFactory
 {
-    Thickness GetPadding(object[] values);
-    SKImageFilter? CreateFilter(object[] values, SkiaEffectContext context);
+    public Thickness GetPadding(TintEffect effect) => default;
+
+    public SKImageFilter? CreateFilter(TintEffect effect, SkiaEffectContext context)
+    {
+        return CreateFilter(new object[] { effect.Color, effect.Strength }, context);
+    }
+
+    public Thickness GetPadding(object[] values) => default;
+
+    public SKImageFilter? CreateFilter(object[] values, SkiaEffectContext context)
+    {
+        var color = (Color)values[0];
+        var strength = (double)values[1];
+        var tintMatrix = new[]
+        {
+            color.R / 255f, 0f, 0f, 0f, 0f,
+            0f, color.G / 255f, 0f, 0f, 0f,
+            0f, 0f, color.B / 255f, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        };
+
+        var matrix = ColorMatrixBuilder.Blend(
+            ColorMatrixBuilder.CreateIdentity(),
+            tintMatrix,
+            (float)Math.Clamp(strength, 0d, 1d));
+        return SkiaFilterBuilder.ColorFilter(SKColorFilter.CreateColorMatrix(matrix));
+    }
 }
 ```
 
-For runtime shader passes, factories can also implement:
+### 3. Apply it in XAML or code
+
+```xml
+<Border Width="240" Height="120" Background="#1F2937">
+  <Border.Effect>
+    <local:TintEffect Color="#00C2FF" Strength="0.35" />
+  </Border.Effect>
+</Border>
+```
 
 ```csharp
-public interface ISkiaShaderEffectFactory<in TEffect>
-    where TEffect : class, IEffect
+previewBorder.Effect = new TintEffect
 {
-    SkiaShaderEffect? CreateShaderEffect(TEffect effect, SkiaShaderEffectContext context);
-}
+    Color = Color.Parse("#00C2FF"),
+    Strength = 0.35d
+};
+```
 
-public interface ISkiaShaderEffectValueFactory
+## Shader Effects
+
+Runtime shaders use `ISkiaShaderEffectFactory<T>` and `ISkiaShaderEffectValueFactory`. Effector can route the effect through `SKRuntimeEffect` or a fallback renderer depending on runtime capabilities.
+
+```csharp
+public sealed class ScanlineShaderEffectFactory :
+    ISkiaEffectFactory<ScanlineShaderEffect>,
+    ISkiaShaderEffectFactory<ScanlineShaderEffect>,
+    ISkiaEffectValueFactory,
+    ISkiaShaderEffectValueFactory
 {
-    SkiaShaderEffect? CreateShaderEffect(object[] values, SkiaShaderEffectContext context);
+    public Thickness GetPadding(ScanlineShaderEffect effect) => default;
+
+    public SKImageFilter? CreateFilter(ScanlineShaderEffect effect, SkiaEffectContext context) => null;
+
+    public Thickness GetPadding(object[] values) => default;
+
+    public SKImageFilter? CreateFilter(object[] values, SkiaEffectContext context) => null;
+
+    public SkiaShaderEffect? CreateShaderEffect(
+        ScanlineShaderEffect effect,
+        SkiaShaderEffectContext context)
+    {
+        return CreateShaderEffect(new object[] { effect.Spacing, effect.Strength }, context);
+    }
+
+    public SkiaShaderEffect? CreateShaderEffect(object[] values, SkiaShaderEffectContext context)
+    {
+        var spacing = (double)values[0];
+        var strength = (double)values[1];
+        return SkiaRuntimeShaderBuilder.Create(
+            sksl: """
+                  uniform float spacing;
+                  uniform float strength;
+
+                  half4 main(float2 coord) {
+                      float span = max(spacing, 1.0);
+                      float local = fract(coord.y / span);
+                      float alpha = local >= 0.5 ? strength : 0.0;
+                      return half4(0.0, 0.0, 0.0, alpha);
+                  }
+                  """,
+            context,
+            uniforms =>
+            {
+                uniforms.Add("spacing", (float)spacing);
+                uniforms.Add("strength", (float)strength);
+            });
+    }
 }
 ```
 
-This path is intended for procedural overlays and other runtime shader work built with `SKRuntimeEffect` and `SkiaRuntimeShaderBuilder`.
+## Interactive Effects
 
-`SkiaShaderEffect` also supports a fallback Skia draw callback. In this repo that fallback is used for CPU/headless rendering, where direct `SKRuntimeEffect` draws can still be less stable than the compositor-backed GPU path. GPU-capable Skia surfaces still use the real runtime shader draw.
+Interactive effects can derive from `SkiaInteractiveEffectBase` or implement `ISkiaInputEffectHandler`. Effector attaches to the host visual and routes:
 
-For input-driven effects, derive from `SkiaInteractiveEffectBase` or implement `ISkiaInputEffectHandler`. Effector attaches to the effected host visual, tracks bounds, and routes pointer entered, exited, moved, pressed, released, capture-lost, and wheel events through `SkiaEffectHostContext`, which also exposes pointer normalization and capture helpers.
+- pointer entered
+- pointer exited
+- pointer moved
+- pointer pressed
+- pointer released
+- pointer capture lost
+- pointer wheel
 
-For string-based authoring, custom effects participate in `Effect.Parse` and `EffectConverter` through a named syntax such as `tint(color=#0F9D8E, strength=0.55)`. Property names are matched case-insensitively and also accept kebab-case.
+`SkiaEffectHostContext` exposes normalized coordinates, host bounds, invalidation helpers, and pointer capture helpers. The sample gallery uses this for spotlight, reactive grid, water ripple, and burn-away button demos.
 
-For whole-effect animation, custom effects now participate in Avalonia's built-in `EffectTransition` and keyframe `Animation` pipeline. Matching custom effect types interpolate property-by-property for common numeric, geometry, and color values; incompatible custom effect pairs fall back to the same midpoint step behavior Avalonia uses for incompatible built-ins.
+## Parsing and Animation
 
-## Build-Time Avalonia Patching
+Custom effects participate in Avalonia's normal effect pipeline:
 
-Effector now uses a metadata-first migration path modeled after the `XamlToCSharpGenerator` approach:
+- `Effect.Parse(...)`
+- `EffectConverter`
+- `EffectTransition`
+- keyframe `Animation`
+- immutable equality and snapshot comparison
 
-- `System.Reflection.Metadata` scans candidate consumer effects and validates the app-local `Avalonia.Base.dll` / `Avalonia.Skia.dll` copies before rewriting.
-- `Mono.Cecil` performs deterministic IL rewriting after build and after publish.
-- `buildTransitive/Effector.targets` patches:
-  - the consumer assembly after `CoreCompile`
-  - `$(TargetDir)/Avalonia.Base.dll`
-  - `$(TargetDir)/Avalonia.Skia.dll`
-  - `$(PublishDir)/Avalonia.Base.dll`
-  - `$(PublishDir)/Avalonia.Skia.dll`
+Named string syntax is case-insensitive and property-based:
 
-The patched Avalonia binaries call these `EffectorRuntime` entry points directly:
+```csharp
+var effect = Effect.Parse("tint(color=#0F9D8E, strength=0.55)");
+```
 
-- `ToImmutablePatched`
-- `GetEffectOutputPaddingPatched`
-- `ParseEffectPatched`
-- `TryCreateTransitionObservable`
-- `TryApplyCustomEffectAnimator`
-- `TryInterpolateEffect`
-- `RecordRenderThreadEffect`
-- `CreateEffectPatched`
-- `TryBeginShaderEffectPatched`
-- `TryEndShaderEffectPatched`
-- `TryGetActiveShaderCanvas`
-- `TryGetActiveShaderSurface`
-- `ApplyActiveShaderFrameTransformOffsetPatched`
+## MSBuild Integration
 
-## Build And Verify
+The NuGet package ships `buildTransitive` targets. On consuming projects Effector:
+
+- weaves the compiled consumer assembly after `CoreCompile`
+- patches app-local `Avalonia.Base.dll` and `Avalonia.Skia.dll` after build output copy
+- patches publish output
+- patches the NativeAOT ILC input assemblies before native compilation
+
+Supported MSBuild switches:
+
+```xml
+<PropertyGroup>
+  <EffectorEnabled>true</EffectorEnabled>
+  <EffectorStrict>true</EffectorStrict>
+  <EffectorVerbose>false</EffectorVerbose>
+  <EffectorSupportedAvaloniaVersion>11.3.12</EffectorSupportedAvaloniaVersion>
+</PropertyGroup>
+```
+
+### What gets patched
+
+Effector rewrites the local Avalonia binaries so Avalonia calls into `EffectorRuntime` for:
+
+- immutable conversion
+- effect padding
+- parsing
+- transitions and animator interpolation
+- render-thread effect transport
+- Skia filter creation
+- shader effect push/pop and active canvas/surface selection
+
+## NativeAOT
+
+Effector supports NativeAOT publish for the sample app and consumer apps using the same packaged targets.
+
+Example:
 
 ```bash
-dotnet build Effector.slnx
-AVALONIA_SCREENSHOT_DIR=$PWD/artifacts/headless-screenshots \
-DYLD_LIBRARY_PATH=$PWD/tests/Effector.Runtime.Tests/bin/Debug/net8.0/runtimes/osx/native \
-dotnet test Effector.slnx --no-build -v minimal
+dotnet publish samples/Effector.Sample.App/Effector.Sample.App.csproj \
+  -c Release \
+  -r osx-arm64 \
+  -p:PublishAot=true \
+  -p:StripSymbols=false
 ```
 
-Verified behavior includes:
+The repository also validates this path in CI on macOS using a NativeAOT publish step.
 
-- custom effects are assignable to `IEffect`
-- build-time patching rewrites app-local `Avalonia.Base.dll` and `Avalonia.Skia.dll`
-- patched Avalonia assemblies are detected as already patched on subsequent runs
-- `EffectExtensions.ToImmutable` returns generated immutable types
-- custom padding is used for glow
-- built-in Avalonia effects still work
-- custom effect strings parse through `Effect.Parse`
-- custom effect transitions interpolate through `EffectTransition`
-- custom keyframe animations interpolate through Avalonia's `EffectAnimator`
-- frozen custom effects perform equality, padding, filter creation, and shader creation safely off the UI thread
-- the build task rejects factories that cannot render from immutable value snapshots
-- the default runtime lane passes on patched binaries with deterministic unit/integration coverage
+## Repository Layout
 
-The default runtime lane intentionally skips full-window `Avalonia.Headless + Skia` capture tests that remain unstable in this environment. Those tests are sample-gallery smoke coverage, not the core metadata-weaving or patched-binary validation path.
+- `src/Effector`
+  - runtime library and public authoring API
+- `src/Effector.Build.Tasks`
+  - metadata scanner, weaver, and Avalonia assembly patcher
+- `src/Effector.Build`
+  - packaged `buildTransitive` props/targets
+- `src/Effector.SelfWeaver`
+  - post-build rewriter for `Effector.dll`
+- `samples/Effector.Sample.Effects`
+  - reusable sample effect library
+- `samples/Effector.Sample.App`
+  - effect gallery and AOT validation sample
+- `tests/Effector.Build.Tasks.Tests`
+  - metadata and patcher tests
+- `tests/Effector.Runtime.Tests`
+  - immutable, render-thread, shader, parsing, and sample behavior coverage
 
-Optional headless screenshot artifacts, when run manually in a stable environment, are written to:
+## Sample Gallery
 
-- `artifacts/headless-screenshots/main-window.png`
-- `artifacts/headless-screenshots/pixelate.png`
-- `artifacts/headless-screenshots/shader-spotlight.png`
-- `artifacts/headless-screenshots/shader-pointer-spotlight.png`
+The sample app includes:
 
-## NuGet Output
+- tint
+- pixelate
+- grayscale
+- sepia
+- saturation
+- brightness and contrast
+- invert
+- glow
+- sharpen
+- edge detect
+- scanline shader
+- grid shader
+- spotlight shader
+- pointer spotlight shader
+- reactive grid shader
+- water ripple shader
+- burning action button shader
 
-Building `src/Effector/Effector.csproj` produces:
+## Build, Test, Pack
 
-- `src/Effector/bin/Debug/Effector.0.1.0.nupkg`
+Build the solution:
 
-The package contains:
+```bash
+dotnet restore
+dotnet build Effector.slnx -c Release -m:1 -p:GeneratePackageOnBuild=false
+```
 
-- `lib/netstandard2.0/Effector.dll`
-- `buildTransitive/Effector.props`
-- `buildTransitive/Effector.targets`
-- `buildTransitive/Effector.Build.Tasks.dll`
-- task dependencies (`Mono.Cecil.dll`, `System.Reflection.Metadata.dll`)
+Run build-task tests:
 
-## Repo Sample Wiring
+```bash
+dotnet test tests/Effector.Build.Tasks.Tests/Effector.Build.Tasks.Tests.csproj -c Release --no-build
+```
 
-Inside this repo the samples use project references plus the same local build props/targets that are packed into the NuGet. External consumers only need a normal `PackageReference` to `Effector`.
+Run runtime tests on macOS:
+
+```bash
+AVALONIA_SCREENSHOT_DIR=$PWD/artifacts/headless-screenshots \
+DYLD_LIBRARY_PATH=$PWD/tests/Effector.Runtime.Tests/bin/Release/net8.0/runtimes/osx/native \
+dotnet test tests/Effector.Runtime.Tests/Effector.Runtime.Tests.csproj -c Release --no-build
+```
+
+Pack the NuGet:
+
+```bash
+dotnet build src/Effector/Effector.csproj -c Release -m:1 -p:GeneratePackageOnBuild=false
+dotnet pack src/Effector/Effector.csproj \
+  -c Release \
+  --no-build \
+  -p:IncludeSymbols=true \
+  -p:SymbolPackageFormat=snupkg \
+  -o artifacts/packages
+```
+
+Because `Effector.dll` is self-weaved in place after build, use `-m:1` or another sequential build strategy for clean solution builds. Parallel graph builds can race the self-weaver and produce stale compile surfaces.
+
+## CI and Release
+
+The repository ships two GitHub Actions workflows:
+
+- `build.yml`
+  - restore and build
+  - run build-task tests on Linux
+  - run runtime tests on macOS
+  - NativeAOT publish the sample app on macOS
+  - pack the NuGet package
+- `release.yml`
+  - run the same validation path for tagged or manually dispatched releases
+  - push `Effector` packages to NuGet
+  - create a GitHub release with attached package artifacts
+
+## Limitations
+
+- Avalonia version support is intentionally pinned to `11.3.12`.
+- Effector is designed around `Avalonia.Skia`.
+- If your effect needs render-thread execution, implement the value-factory interfaces so rendering can use immutable snapshots only.
+- Unsupported or incompatible effect types during interpolation fall back to step behavior rather than inventing custom interpolation semantics.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
