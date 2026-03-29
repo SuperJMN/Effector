@@ -25,4 +25,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+
+  <Import Project="..\..\src\Effector.Build\buildTransitive\Effector.Build.props" />
+  <Import Project="..\..\src\Effector.Build\buildTransitive\Effector.Build.targets" />
 </Project>

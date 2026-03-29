@@ -34,11 +34,21 @@ public partial class MainWindow : Window
     private readonly List<Grid> _sectionPreviewGrids = new();
     private readonly List<Grid> _previewContentGrids = new();
     private CancellationTokenSource _featureAnimationCts = new();
+    private ScrollViewer? _headlessRootScrollViewer;
+    private StackPanel? _headlessCodeGalleryHost;
 
     public MainWindow()
     {
         DataContext = new MainWindowViewModel();
-        InitializeComponent();
+        if (IsEnvironmentSwitchEnabled("EFFECTOR_SAMPLE_HEADLESS_SAFE_MODE"))
+        {
+            InitializeHeadlessSafeWindow();
+        }
+        else
+        {
+            InitializeComponent();
+            ApplyHeadlessTestMode();
+        }
 
         _sharedBitmap = CreateSharedBitmap(420, 240);
         BuildGallery();
@@ -55,9 +65,117 @@ public partial class MainWindow : Window
         AvaloniaXamlLoader.Load(this);
     }
 
+    private void InitializeHeadlessSafeWindow()
+    {
+        Width = 1400d;
+        Height = 980d;
+        MinWidth = 640d;
+        MinHeight = 480d;
+        Title = "Effector Gallery";
+        Background = Brushes.White;
+        ExtendClientAreaToDecorationsHint = false;
+        ExtendClientAreaChromeHints = ExtendClientAreaChromeHints.Default;
+        TransparencyLevelHint = new[] { WindowTransparencyLevel.None };
+        BuildHeadlessSafeShell();
+    }
+
+    private void ApplyHeadlessTestMode()
+    {
+        if (!IsEnvironmentSwitchEnabled("EFFECTOR_SAMPLE_HIDE_FEATURE_ROWS"))
+        {
+            return;
+        }
+
+        RemoveFeatureRow("FeatureRowOneGrid");
+        RemoveFeatureRow("FeatureRowTwoGrid");
+    }
+
+    private void RemoveFeatureRow(string name)
+    {
+        if (this.FindControl<Grid>(name) is not { Parent: Panel parent } grid)
+        {
+            return;
+        }
+
+        grid.IsVisible = false;
+        parent.Children.Remove(grid);
+    }
+
+    private void BuildHeadlessSafeShell()
+    {
+        var titleBlock = new TextBlock
+        {
+            Text = "Effector Gallery",
+            FontSize = 28,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = new SolidColorBrush(Color.Parse("#1E2A2D"))
+        };
+
+        var subtitleBlock = new TextBlock
+        {
+            Text = "Headless-safe gallery shell for runtime render verification.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.Parse("#55666B"))
+        };
+
+        var galleryHost = new StackPanel
+        {
+            Spacing = 18
+        };
+
+        var shell = new StackPanel
+        {
+            Margin = new Thickness(24),
+            Spacing = 18,
+            Children =
+            {
+                new Border
+                {
+                    Padding = new Thickness(20),
+                    CornerRadius = new CornerRadius(20),
+                    Background = new SolidColorBrush(Color.Parse("#FFFDFCFA")),
+                    BorderBrush = new SolidColorBrush(Color.Parse("#22003845")),
+                    BorderThickness = new Thickness(1),
+                    Child = new StackPanel
+                    {
+                        Spacing = 10,
+                        Children =
+                        {
+                            titleBlock,
+                            subtitleBlock
+                        }
+                    }
+                },
+                new Border
+                {
+                    Padding = new Thickness(20),
+                    CornerRadius = new CornerRadius(20),
+                    Background = new SolidColorBrush(Color.Parse("#FFFDFCFA")),
+                    BorderBrush = new SolidColorBrush(Color.Parse("#22003845")),
+                    BorderThickness = new Thickness(1),
+                    Child = galleryHost
+                }
+            }
+        };
+
+        _headlessRootScrollViewer = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = shell
+        };
+
+        _headlessCodeGalleryHost = galleryHost;
+        Content = _headlessRootScrollViewer;
+    }
+
     private void OnOpened(object? sender, EventArgs e)
     {
-        StartFeatureAnimations();
+        if (!IsEnvironmentSwitchEnabled("EFFECTOR_SAMPLE_DISABLE_FEATURE_ANIMATIONS"))
+        {
+            StartFeatureAnimations();
+        }
+
         ApplyResponsiveLayout(Bounds.Width > 0d ? Bounds.Width : Width);
 
         if (IsEnvironmentSwitchEnabled("EFFECTOR_SAMPLE_AUTO_SCROLL_TO_FIRST_SHADER"))
@@ -102,14 +220,30 @@ public partial class MainWindow : Window
                bool.TryParse(value, out var enabled) && enabled;
     }
 
+    private static bool TryGetSectionLimit(out int limit)
+    {
+        limit = 0;
+        var value = Environment.GetEnvironmentVariable("EFFECTOR_SAMPLE_LIMIT_SECTIONS");
+        return !string.IsNullOrWhiteSpace(value) &&
+               int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out limit) &&
+               limit >= 0;
+    }
+
     private void BuildGallery()
     {
-        if (this.FindControl<StackPanel>("CodeGalleryHost") is not { } host)
+        var host = _headlessCodeGalleryHost ?? this.FindControl<StackPanel>("CodeGalleryHost");
+        if (host is null)
         {
             return;
         }
 
-        foreach (var definition in CreateDefinitions())
+        var definitions = CreateDefinitions();
+        if (TryGetSectionLimit(out var limit))
+        {
+            definitions = definitions.Take(limit).ToArray();
+        }
+
+        foreach (var definition in definitions)
         {
             host.Children.Add(BuildSection(definition));
         }
@@ -117,7 +251,8 @@ public partial class MainWindow : Window
 
     private void ConfigureScrollBehavior()
     {
-        if (this.FindControl<ScrollViewer>("RootScrollViewer") is { } scrollViewer)
+        var scrollViewer = _headlessRootScrollViewer ?? this.FindControl<ScrollViewer>("RootScrollViewer");
+        if (scrollViewer is not null)
         {
             scrollViewer.AddHandler(
                 InputElement.PointerWheelChangedEvent,
@@ -215,6 +350,23 @@ public partial class MainWindow : Window
 
     private void ApplyResponsiveLayout(double width)
     {
+        if (_headlessRootScrollViewer is not null)
+        {
+            var headlessStackSectionPreviews = width < StackedSectionPreviewBreakpoint;
+            foreach (var sectionPreviewGrid in _sectionPreviewGrids)
+            {
+                ApplyTwoColumnGridLayout(sectionPreviewGrid, headlessStackSectionPreviews, "*,*", 16d);
+            }
+
+            var headlessStackPreviewContent = width < StackedPreviewContentBreakpoint;
+            foreach (var previewContentGrid in _previewContentGrids)
+            {
+                ApplyTwoColumnGridLayout(previewContentGrid, headlessStackPreviewContent, "1.15*,0.85*", 14d);
+            }
+
+            return;
+        }
+
         ApplyHeroLayout(width < CompactHeroBreakpoint);
 
         if (this.FindControl<Grid>("FeatureRowOneGrid") is { } featureRowOne)
