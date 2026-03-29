@@ -10,13 +10,17 @@
   <UsingTask TaskName="Effector.Build.Tasks.WeaveSkiaEffectsTask"
              AssemblyFile="$(_EffectorTaskAssemblyPath)"
              Condition="'$(EffectorEnabled)' == 'true' and '$(_EffectorTaskAssemblyPath)' != ''" />
+  <UsingTask TaskName="Effector.Build.Tasks.PatchAvaloniaAssembliesTask"
+             AssemblyFile="$(_EffectorTaskAssemblyPath)"
+             Condition="'$(EffectorEnabled)' == 'true' and '$(_EffectorTaskAssemblyPath)' != ''" />
 
   <Target Name="Effector_BuildLocalTask"
           Condition="'$(EffectorEnabled)' == 'true' and !Exists('$(_EffectorPackagedTaskAssemblyPath)') and Exists('$(_EffectorLocalTaskProjectPath)')">
     <MSBuild Projects="$(_EffectorLocalTaskProjectPath)"
              Targets="Build"
              BuildInParallel="false"
-             Properties="Configuration=$(Configuration);DesignTimeBuild=false;BuildingProject=false" />
+             RemoveProperties="TargetFramework;TargetFrameworks;PublishAot;RuntimeIdentifier;SelfContained;PublishTrimmed;PublishSingleFile;PublishReadyToRun"
+             Properties="Configuration=$(Configuration);GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false" />
   </Target>
 
   <Target Name="Effector_WeaveSkiaEffects"
@@ -33,5 +37,64 @@
                           ProjectDirectory="$(MSBuildProjectDirectory)"
                           ReferencePaths="@(ReferencePath);@(ReferenceCopyLocalPaths)"
                           SupportedAvaloniaVersion="$(EffectorSupportedAvaloniaVersion)" />
+  </Target>
+
+  <Target Name="Effector_PatchAvaloniaOutputAssemblies"
+          AfterTargets="CopyFilesToOutputDirectory"
+          DependsOnTargets="Effector_BuildLocalTask"
+          Condition="'$(EffectorEnabled)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(TargetDir)' != ''">
+    <PatchAvaloniaAssembliesTask AvaloniaBaseAssemblyPath="$([System.IO.Path]::Combine('$(TargetDir)', 'Avalonia.Base.dll'))"
+                                 AvaloniaSkiaAssemblyPath="$([System.IO.Path]::Combine('$(TargetDir)', 'Avalonia.Skia.dll'))"
+                                 Strict="$(EffectorStrict)"
+                                 Verbose="$(EffectorVerbose)"
+                                 SupportedAvaloniaVersion="$(EffectorSupportedAvaloniaVersion)" />
+  </Target>
+
+  <Target Name="Effector_PatchAvaloniaAotCompileAssemblies"
+          AfterTargets="ComputeIlcCompileInputs"
+          BeforeTargets="WriteIlcRspFileForCompilation"
+          DependsOnTargets="Effector_BuildLocalTask"
+          Condition="'$(EffectorEnabled)' == 'true' and '$(PublishAot)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_EffectorAotPatchedAssemblyDir>$([System.IO.Path]::Combine('$(IntermediateOutputPath)', 'effector-aot-patched'))</_EffectorAotPatchedAssemblyDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_EffectorAvaloniaIlcReference Include="@(IlcReference)"
+                                     Condition="'%(Filename)' == 'Avalonia.Base' or '%(Filename)' == 'Avalonia.Skia'" />
+      <_EffectorPatchedIlcReference Include="@(_EffectorAvaloniaIlcReference->'$(_EffectorAotPatchedAssemblyDir)\%(Filename)%(Extension)')" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(_EffectorAotPatchedAssemblyDir)"
+             Condition="'@(_EffectorAvaloniaIlcReference)' != ''" />
+
+    <Copy SourceFiles="@(_EffectorAvaloniaIlcReference)"
+          DestinationFiles="@(_EffectorPatchedIlcReference)"
+          SkipUnchangedFiles="false"
+          OverwriteReadOnlyFiles="true"
+          Condition="'@(_EffectorAvaloniaIlcReference)' != ''" />
+
+    <PatchAvaloniaAssembliesTask AvaloniaBaseAssemblyPath="$([System.IO.Path]::Combine('$(_EffectorAotPatchedAssemblyDir)', 'Avalonia.Base.dll'))"
+                                 AvaloniaSkiaAssemblyPath="$([System.IO.Path]::Combine('$(_EffectorAotPatchedAssemblyDir)', 'Avalonia.Skia.dll'))"
+                                 Strict="$(EffectorStrict)"
+                                 Verbose="$(EffectorVerbose)"
+                                 SupportedAvaloniaVersion="$(EffectorSupportedAvaloniaVersion)"
+                                 Condition="'@(_EffectorAvaloniaIlcReference)' != ''" />
+
+    <ItemGroup Condition="'@(_EffectorAvaloniaIlcReference)' != ''">
+      <IlcReference Remove="@(_EffectorAvaloniaIlcReference)" />
+      <IlcReference Include="@(_EffectorPatchedIlcReference)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="Effector_PatchAvaloniaPublishAssemblies"
+          AfterTargets="Publish"
+          DependsOnTargets="Effector_BuildLocalTask"
+          Condition="'$(EffectorEnabled)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(PublishDir)' != ''">
+    <PatchAvaloniaAssembliesTask AvaloniaBaseAssemblyPath="$([System.IO.Path]::Combine('$(PublishDir)', 'Avalonia.Base.dll'))"
+                                 AvaloniaSkiaAssemblyPath="$([System.IO.Path]::Combine('$(PublishDir)', 'Avalonia.Skia.dll'))"
+                                 Strict="$(EffectorStrict)"
+                                 Verbose="$(EffectorVerbose)"
+                                 SupportedAvaloniaVersion="$(EffectorSupportedAvaloniaVersion)" />
   </Target>
 </Project>

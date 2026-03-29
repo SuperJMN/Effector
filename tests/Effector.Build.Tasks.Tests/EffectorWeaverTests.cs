@@ -189,6 +189,77 @@ public sealed class EffectorWeaverTests
         Assert.Contains(output.Errors, static error => error.Contains(nameof(ISkiaEffectValueFactory), StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AvaloniaBasePatcher_Rewrites_Target_Methods_And_Is_Idempotent()
+    {
+        var sourcePath = GetAvaloniaBasePath();
+        var scanner = new AvaloniaPatchMetadataScanner();
+        var initialScan = scanner.Scan(sourcePath, "11.3.12", AvaloniaPatchAssemblyKind.Base);
+        Assert.True(initialScan.IsSupportedVersion);
+        Assert.False(initialScan.IsAlreadyPatched);
+        Assert.Empty(initialScan.MissingRequirements);
+
+        var tempPath = CopyToTemporaryPath(sourcePath);
+        var patcher = new AvaloniaAssemblyPatcher();
+
+        var first = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Base, "11.3.12");
+        Assert.True(first.Patched);
+        Assert.False(first.AlreadyPatched);
+        Assert.Empty(first.Errors);
+
+        var second = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Base, "11.3.12");
+        Assert.False(second.Patched);
+        Assert.True(second.AlreadyPatched);
+        Assert.Empty(second.Errors);
+
+        var patchedScan = scanner.Scan(tempPath, "11.3.12", AvaloniaPatchAssemblyKind.Base);
+        Assert.True(patchedScan.IsAlreadyPatched);
+
+        using var assembly = AssemblyDefinition.ReadAssembly(tempPath);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Media.EffectExtensions", "ToImmutable", "ToImmutablePatched");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Media.EffectExtensions", "GetEffectOutputPadding", "GetEffectOutputPaddingPatched");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Media.Effect", "Parse", "ParseEffectPatched");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Animation.EffectTransition", "DoTransition", "TryCreateTransitionObservable");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Animation.Animators.EffectAnimator", "Apply", "TryApplyCustomEffectAnimator");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Animation.Animators.EffectAnimator", "Interpolate", "TryInterpolateEffect");
+        AssertMethodDoesNotCallRuntime(assembly, "Avalonia.Rendering.Composition.Server.ServerCompositionVisual", "PushEffect", "RecordRenderThreadEffect");
+    }
+
+    [Fact]
+    public void AvaloniaSkiaPatcher_Rewrites_Target_Methods_And_Is_Idempotent()
+    {
+        var sourcePath = GetAvaloniaSkiaPath();
+        var scanner = new AvaloniaPatchMetadataScanner();
+        var initialScan = scanner.Scan(sourcePath, "11.3.12", AvaloniaPatchAssemblyKind.Skia);
+        Assert.True(initialScan.IsSupportedVersion);
+        Assert.False(initialScan.IsAlreadyPatched);
+        Assert.Empty(initialScan.MissingRequirements);
+
+        var tempPath = CopyToTemporaryPath(sourcePath);
+        var patcher = new AvaloniaAssemblyPatcher();
+
+        var first = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Skia, "11.3.12");
+        Assert.True(first.Patched);
+        Assert.False(first.AlreadyPatched);
+        Assert.Empty(first.Errors);
+
+        var second = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Skia, "11.3.12");
+        Assert.False(second.Patched);
+        Assert.True(second.AlreadyPatched);
+        Assert.Empty(second.Errors);
+
+        var patchedScan = scanner.Scan(tempPath, "11.3.12", AvaloniaPatchAssemblyKind.Skia);
+        Assert.True(patchedScan.IsAlreadyPatched);
+
+        using var assembly = AssemblyDefinition.ReadAssembly(tempPath);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "CreateEffect", "CreateEffectPatched");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PushEffect", "TryBeginShaderEffectPatched");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PopEffect", "TryEndShaderEffectPatched");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "get_Canvas", "TryGetActiveShaderCanvas");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "get_Surface", "TryGetActiveShaderSurface");
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "set_Transform", "ApplyActiveShaderFrameTransformOffsetPatched");
+    }
+
     private static EffectorWeaverResult RewriteTemporaryAssembly(string assemblyPath) =>
         new EffectorWeaver().Rewrite(
             new EffectorWeaverConfiguration(
@@ -270,6 +341,62 @@ public sealed class EffectorWeaverTests
     {
         var repositoryRoot = GetRepositoryRoot();
         return Path.Combine(repositoryRoot, "src/Effector/bin/Debug/netstandard2.0/Effector.dll");
+    }
+
+    private static string GetAvaloniaBasePath() =>
+        typeof(Effect).Assembly.Location;
+
+    private static string GetAvaloniaSkiaPath() =>
+        Path.Combine(Path.GetDirectoryName(typeof(Effect).Assembly.Location)!, "Avalonia.Skia.dll");
+
+    private static string CopyToTemporaryPath(string sourcePath)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "effector-avalonia-patch-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var destinationPath = Path.Combine(directory, Path.GetFileName(sourcePath));
+        File.Copy(sourcePath, destinationPath, overwrite: true);
+
+        var pdbSource = Path.ChangeExtension(sourcePath, ".pdb");
+        if (File.Exists(pdbSource))
+        {
+            File.Copy(pdbSource, Path.ChangeExtension(destinationPath, ".pdb"), overwrite: true);
+        }
+
+        return destinationPath;
+    }
+
+    private static void AssertMethodCallsRuntime(
+        AssemblyDefinition assembly,
+        string typeFullName,
+        string methodName,
+        string runtimeMethodName)
+    {
+        var type = assembly.MainModule.Types.Single(type => type.FullName == typeFullName);
+        var method = type.Methods.First(candidate => candidate.Name == methodName);
+        Assert.Contains(
+            method.Body.Instructions,
+            instruction =>
+                instruction.OpCode == OpCodes.Call &&
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "Effector.EffectorRuntime" &&
+                called.Name == runtimeMethodName);
+    }
+
+    private static void AssertMethodDoesNotCallRuntime(
+        AssemblyDefinition assembly,
+        string typeFullName,
+        string methodName,
+        string runtimeMethodName)
+    {
+        var type = assembly.MainModule.Types.Single(type => type.FullName == typeFullName);
+        var method = type.Methods.First(candidate => candidate.Name == methodName);
+        Assert.DoesNotContain(
+            method.Body.Instructions,
+            instruction =>
+                instruction.OpCode == OpCodes.Call &&
+                instruction.Operand is MethodReference called &&
+                called.DeclaringType.FullName == "Effector.EffectorRuntime" &&
+                called.Name == runtimeMethodName);
     }
 
     private static string[] GetReferencePaths()
