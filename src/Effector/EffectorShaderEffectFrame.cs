@@ -1,6 +1,5 @@
 using System;
 using Avalonia.Media;
-using Avalonia.Platform;
 using SkiaSharp;
 
 namespace Effector;
@@ -15,7 +14,7 @@ internal sealed class EffectorShaderEffectFrame : IDisposable
         SKSurface? previousSurface,
         SKSurface surface,
         IDisposable layerOwner,
-        IDrawingContextImpl layerDrawingContext,
+        IDisposable? layerDrawingContext,
         SkiaEffectContext effectContext,
         SKRectI deviceClipBounds,
         SKRect effectBounds,
@@ -34,7 +33,7 @@ internal sealed class EffectorShaderEffectFrame : IDisposable
         PreviousSurface = previousSurface;
         Surface = surface ?? throw new ArgumentNullException(nameof(surface));
         LayerOwner = layerOwner ?? throw new ArgumentNullException(nameof(layerOwner));
-        LayerDrawingContext = layerDrawingContext ?? throw new ArgumentNullException(nameof(layerDrawingContext));
+        LayerDrawingContext = layerDrawingContext;
         EffectContext = effectContext;
         DeviceClipBounds = deviceClipBounds;
         EffectBounds = effectBounds;
@@ -59,7 +58,7 @@ internal sealed class EffectorShaderEffectFrame : IDisposable
 
     public IDisposable LayerOwner { get; }
 
-    public IDrawingContextImpl LayerDrawingContext { get; }
+    public IDisposable? LayerDrawingContext { get; }
 
     public SkiaEffectContext EffectContext { get; }
 
@@ -92,7 +91,7 @@ internal sealed class EffectorShaderEffectFrame : IDisposable
             return;
         }
 
-        LayerDrawingContext.Dispose();
+        LayerDrawingContext?.Dispose();
         _layerDrawingContextDisposed = true;
     }
 

@@ -22,6 +22,7 @@ public static class EffectorRuntime
 {
     private const string SupportedAvaloniaVersion = "11.3.12";
     private static readonly Version? SkiaSharpAssemblyVersion = typeof(SKRuntimeEffect).Assembly.GetName().Version;
+    private static readonly bool IsNativeAot = GetIsNativeAot();
     private static readonly bool DirectRuntimeShadersOptIn = ParseBooleanEnvironmentVariable("EFFECTOR_ENABLE_DIRECT_RUNTIME_SHADERS");
     private static readonly string? ShaderTracePath = Environment.GetEnvironmentVariable("EFFECTOR_SHADER_TRACE_PATH");
     private static readonly string? ShaderSnapshotDir = Environment.GetEnvironmentVariable("EFFECTOR_SHADER_SNAPSHOT_DIR");
@@ -57,8 +58,8 @@ public static class EffectorRuntime
     private static FieldInfo? s_skiaBaseSurfaceField;
     private static FieldInfo? s_skiaCanvasBackingField;
     private static FieldInfo? s_skiaSurfaceBackingField;
-    private static MethodInfo? s_skiaCreateLayerMethod;
     private static PropertyInfo? s_skiaRenderOptionsProperty;
+    private static MethodInfo? s_skiaCreateLayerMethod;
     private static ConstructorInfo? s_effectAnimatorDisposeSubjectCtor;
 
     private sealed class EffectBoundsHolder
@@ -101,6 +102,22 @@ public static class EffectorRuntime
         public object Proxy { get; }
     }
 
+    private sealed class ShaderCaptureOwner : IDisposable
+    {
+        private SKSurface? _surface;
+
+        public ShaderCaptureOwner(SKSurface surface)
+        {
+            _surface = surface;
+        }
+
+        public void Dispose()
+        {
+            _surface?.Dispose();
+            _surface = null;
+        }
+    }
+
     private enum EffectRectSource
     {
         None,
@@ -120,6 +137,15 @@ public static class EffectorRuntime
         public Rect? Rect { get; }
 
         public EffectRectSource Source { get; }
+    }
+
+    private static bool GetIsNativeAot()
+    {
+#if NET8_0_OR_GREATER
+        return !RuntimeFeature.IsDynamicCodeSupported;
+#else
+        return false;
+#endif
     }
 
     public static void EnsureInitialized()
@@ -483,6 +509,7 @@ public static class EffectorRuntime
     {
         EnsureInitialized();
         EnsureSkiaMetadata(drawingContext);
+        TraceShaderPhase(effect, "begin:patched");
         return TryBeginShaderEffect(drawingContext, effectClipRect, effect);
     }
 
@@ -490,6 +517,7 @@ public static class EffectorRuntime
     {
         EnsureInitialized();
         EnsureSkiaMetadata(drawingContext);
+        TraceShaderGlobalPhase(drawingContext, "end:patched");
         return TryEndShaderEffect(drawingContext);
     }
 
@@ -1143,17 +1171,6 @@ public static class EffectorRuntime
         DynamicallyAccessedMemberTypes.NonPublicProperties,
         "Avalonia.Skia.DrawingContextImpl",
         "Avalonia.Skia")]
-    [DynamicDependency(
-        DynamicallyAccessedMemberTypes.PublicMethods |
-        DynamicallyAccessedMemberTypes.NonPublicMethods |
-        DynamicallyAccessedMemberTypes.PublicConstructors |
-        DynamicallyAccessedMemberTypes.NonPublicConstructors |
-        DynamicallyAccessedMemberTypes.PublicFields |
-        DynamicallyAccessedMemberTypes.NonPublicFields |
-        DynamicallyAccessedMemberTypes.PublicProperties |
-        DynamicallyAccessedMemberTypes.NonPublicProperties,
-        "Avalonia.Skia.DrawingContextImpl/CreateInfo",
-        "Avalonia.Skia")]
     private static void TryPatchSkia(Assembly assembly)
     {
         if (s_skiaPatched || assembly.GetName().Name != "Avalonia.Skia")
@@ -1415,10 +1432,26 @@ public static class EffectorRuntime
             Persp2 = (float)matrix.M33
         };
 
+    private static Matrix ToAvaloniaMatrix(SKMatrix matrix) =>
+        new(
+            matrix.ScaleX, matrix.SkewY, matrix.Persp0,
+            matrix.SkewX, matrix.ScaleY, matrix.Persp1,
+            matrix.TransX, matrix.TransY, matrix.Persp2);
+
+    private static void ApplyInitialShaderCaptureTransform(EffectorShaderEffectFrame frame)
+    {
+        var captureCanvas = frame.Surface.Canvas;
+        var translatedTransform =
+            Matrix.CreateTranslation(-frame.EffectBounds.Left, -frame.EffectBounds.Top) *
+            ToAvaloniaMatrix(frame.TotalMatrix);
+        captureCanvas.SetMatrix(ToSKMatrix(translatedTransform));
+    }
+
     private static bool TryBeginShaderEffect(object drawingContext, Rect? effectClipRect, IEffect effect)
     {
         if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor?.CreateShaderEffect is null)
         {
+            TraceShaderPhase(effect, "begin:not-shader");
             return false;
         }
 
@@ -1430,7 +1463,7 @@ public static class EffectorRuntime
         {
             throw new InvalidOperationException("Avalonia.Skia base surface field has not been discovered.");
         }
-        if (s_skiaCreateLayerMethod is null)
+        if (!IsNativeAot && s_skiaCreateLayerMethod is null)
         {
             throw new InvalidOperationException("Avalonia.Skia layer creation method has not been discovered.");
         }
@@ -1468,19 +1501,34 @@ public static class EffectorRuntime
         var rawEffectRect = authoritativeEffectRect.Rect.HasValue ? ToSKRect(authoritativeEffectRect.Rect.Value) : (SKRect?)null;
         if (deviceEffectBounds.IsEmpty)
         {
+            TraceShaderPhase(effect, "begin:device-bounds-empty");
             return false;
         }
 
         var intermediateSurfaceBounds = ResolveIntermediateSurfaceBounds(deviceEffectBounds);
         if (intermediateSurfaceBounds.Width <= 0 || intermediateSurfaceBounds.Height <= 0)
         {
+            TraceShaderPhase(effect, "begin:surface-bounds-empty");
             return false;
         }
 
         var localEffectBounds = SKRect.Create(intermediateSurfaceBounds.Width, intermediateSurfaceBounds.Height);
-        var (surface, layerOwner, layerDrawingContext) = CreateShaderCaptureContext(
-            drawingContext,
-            new PixelSize(intermediateSurfaceBounds.Width, intermediateSurfaceBounds.Height));
+        TraceShaderPhase(effect, "begin:create-capture-context");
+        SKSurface surface;
+        IDisposable layerOwner;
+        IDisposable? layerDrawingContext;
+        try
+        {
+            (surface, layerOwner, layerDrawingContext) = CreateShaderCaptureContext(
+                drawingContext,
+                new PixelSize(intermediateSurfaceBounds.Width, intermediateSurfaceBounds.Height));
+        }
+        catch (Exception ex)
+        {
+            TraceShaderError(effect, "begin:create-capture-context", ex);
+            return false;
+        }
+        TraceShaderPhase(effect, "begin:capture-context-created");
         var frame = new EffectorShaderEffectFrame(
             effect,
             previousCanvas,
@@ -1497,7 +1545,7 @@ public static class EffectorRuntime
             rawEffectRect,
             totalMatrix,
             usedRenderThreadBounds,
-            false,
+            true,
             proxy: null,
             previousProxyImpl: null);
         StoreShaderDebugInfo(
@@ -1520,7 +1568,10 @@ public static class EffectorRuntime
             }
 
             stack.Push(frame);
+            TraceShaderStackPhase(frame.Effect, drawingContext, "begin:pushed", stack.Count);
         }
+
+        ApplyInitialShaderCaptureTransform(frame);
 
         return true;
     }
@@ -1528,12 +1579,14 @@ public static class EffectorRuntime
     private static bool TryEndShaderEffect(object drawingContext)
     {
         EffectorShaderEffectFrame? frame = null;
+        var remainingFrames = 0;
 
         lock (Sync)
         {
             if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
             {
                 frame = stack.Pop();
+                remainingFrames = stack.Count;
                 if (stack.Count == 0)
                 {
                     ShaderFrames.Remove(drawingContext);
@@ -1543,8 +1596,11 @@ public static class EffectorRuntime
 
         if (frame is null)
         {
+            TraceShaderGlobalPhase(drawingContext, "end:no-frame");
             return false;
         }
+
+        TraceShaderStackPhase(frame.Effect, drawingContext, "end:popped", remainingFrames);
 
         if (s_skiaCanvasBackingField is null)
         {
@@ -1557,13 +1613,18 @@ public static class EffectorRuntime
 
         try
         {
+            TraceShaderPhase(frame.Effect, "end:flush-canvas");
             frame.Surface.Canvas.Flush();
+            TraceShaderPhase(frame.Effect, "end:flush-surface");
             frame.Surface.Flush();
+            TraceShaderPhase(frame.Effect, "end:snapshot");
             using var snapshot = CreateShaderCaptureSnapshot(frame);
             if (snapshot is null)
             {
+                TraceShaderPhase(frame.Effect, "end:snapshot-null");
                 return false;
             }
+            TraceShaderPhase(frame.Effect, "end:snapshot-ok");
             SaveShaderSnapshot(frame.Effect, snapshot);
             var contentBounds = ResolveRenderedContentBounds(snapshot, frame.LocalEffectBounds);
             var globalContentBounds = contentBounds.IsEmpty
@@ -1607,12 +1668,15 @@ public static class EffectorRuntime
             var restoreCount = frame.PreviousCanvas.Save();
             try
             {
+                TraceShaderPhase(frame.Effect, "end:base-reset");
                 frame.PreviousCanvas.ResetMatrix();
                 frame.PreviousCanvas.ClipRect(frame.DeviceEffectBounds);
+                TraceShaderPhase(frame.Effect, "end:base-draw-image");
                 frame.PreviousCanvas.DrawImage(snapshot, frame.IntermediateSurfaceBounds.Left, frame.IntermediateSurfaceBounds.Top);
 
                 if (shaderEffect is not null)
                 {
+                    TraceShaderPhase(frame.Effect, "end:overlay");
                     DrawMaskedShaderOverlay(
                         drawingContext,
                         frame.PreviousCanvas,
@@ -1621,6 +1685,7 @@ public static class EffectorRuntime
                         contentBounds.IsEmpty ? frame.LocalEffectBounds : contentBounds,
                         frame.LocalEffectBounds,
                         frame.DeviceEffectBounds);
+                    TraceShaderPhase(frame.Effect, "end:overlay-done");
                 }
             }
             finally
@@ -1637,12 +1702,11 @@ public static class EffectorRuntime
         return true;
     }
 
-    private static (SKSurface Surface, IDisposable Owner, Avalonia.Platform.IDrawingContextImpl DrawingContext) CreateShaderCaptureContext(
+    private static (SKSurface Surface, IDisposable Owner, IDisposable? DrawingContext) CreateShaderCaptureContext(
         object sourceDrawingContext,
         PixelSize pixelSize)
     {
-        if (s_skiaCreateLayerMethod is null ||
-            s_skiaRenderOptionsProperty is null ||
+        if (s_skiaRenderOptionsProperty is null ||
             s_skiaCurrentOpacityField is null ||
             s_skiaUseOpacitySaveLayerField is null ||
             s_skiaCanvasBackingField is null ||
@@ -1651,35 +1715,68 @@ public static class EffectorRuntime
             throw new InvalidOperationException("Avalonia.Skia shader capture helpers have not been discovered.");
         }
 
-        var layer = s_skiaCreateLayerMethod.Invoke(sourceDrawingContext, new object[] { pixelSize }) as IDisposable
-            ?? throw new InvalidOperationException("Avalonia.Skia failed to create a compatible shader capture layer.");
-        var createDrawingContext = layer.GetType().GetMethod(
-            "CreateDrawingContext",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            types: new[] { typeof(bool) },
-            modifiers: null)
-            ?? throw new MissingMethodException(layer.GetType().FullName, "CreateDrawingContext");
-        var drawingContext = createDrawingContext.Invoke(layer, new object[] { false }) as Avalonia.Platform.IDrawingContextImpl
-            ?? throw new InvalidOperationException("Avalonia.Skia capture layer failed to create a drawing context.");
-        s_skiaRenderOptionsProperty.SetValue(
-            drawingContext,
-            s_skiaRenderOptionsProperty.GetValue(sourceDrawingContext));
-        s_skiaCurrentOpacityField.SetValue(
-            drawingContext,
-            s_skiaCurrentOpacityField.GetValue(sourceDrawingContext));
-        s_skiaUseOpacitySaveLayerField.SetValue(
-            drawingContext,
-            s_skiaUseOpacitySaveLayerField.GetValue(sourceDrawingContext));
+        if (s_skiaCreateLayerMethod is null)
+        {
+            return CreateRasterShaderCaptureContext(sourceDrawingContext, pixelSize);
+        }
 
-        var canvas = (SKCanvas?)s_skiaCanvasBackingField.GetValue(drawingContext)
-            ?? throw new InvalidOperationException("Shader capture context did not expose a Skia canvas.");
-        var surface = (SKSurface?)s_skiaSurfaceBackingField.GetValue(drawingContext)
-            ?? throw new InvalidOperationException("Shader capture context did not expose a Skia surface.");
-        canvas.Clear(SKColors.Transparent);
-        canvas.ResetMatrix();
-        canvas.ClipRect(SKRect.Create(Math.Max(pixelSize.Width, 1), Math.Max(pixelSize.Height, 1)));
-        return (surface, layer, drawingContext);
+        try
+        {
+            var layer = s_skiaCreateLayerMethod.Invoke(sourceDrawingContext, new object[] { pixelSize }) as IDisposable
+                ?? throw new InvalidOperationException("Avalonia.Skia failed to create a compatible shader capture layer.");
+            var renderTargetType = typeof(IBitmapImpl).Assembly.GetType("Avalonia.Platform.IRenderTarget", throwOnError: true)
+                ?? throw new InvalidOperationException("Avalonia.Base did not expose Avalonia.Platform.IRenderTarget.");
+            var createDrawingContext = renderTargetType.GetMethod(
+                "CreateDrawingContext",
+                BindingFlags.Instance | BindingFlags.Public,
+                binder: null,
+                types: new[] { typeof(bool) },
+                modifiers: null)
+                ?? throw new MissingMethodException(renderTargetType.FullName, "CreateDrawingContext");
+            var drawingContext = createDrawingContext.Invoke(layer, new object[] { false }) as Avalonia.Platform.IDrawingContextImpl
+                ?? throw new InvalidOperationException("Avalonia.Skia capture layer failed to create a drawing context.");
+            s_skiaRenderOptionsProperty.SetValue(
+                drawingContext,
+                s_skiaRenderOptionsProperty.GetValue(sourceDrawingContext));
+            s_skiaCurrentOpacityField.SetValue(
+                drawingContext,
+                s_skiaCurrentOpacityField.GetValue(sourceDrawingContext));
+            s_skiaUseOpacitySaveLayerField.SetValue(
+                drawingContext,
+                s_skiaUseOpacitySaveLayerField.GetValue(sourceDrawingContext));
+
+            var canvas = (SKCanvas?)s_skiaCanvasBackingField.GetValue(drawingContext)
+                ?? throw new InvalidOperationException("Shader capture context did not expose a Skia canvas.");
+            var surface = (SKSurface?)s_skiaSurfaceBackingField.GetValue(drawingContext)
+                ?? throw new InvalidOperationException("Shader capture context did not expose a Skia surface.");
+            canvas.Clear(SKColors.Transparent);
+            canvas.ResetMatrix();
+            canvas.ClipRect(SKRect.Create(Math.Max(pixelSize.Width, 1), Math.Max(pixelSize.Height, 1)));
+            return (surface, layer, drawingContext);
+        }
+        catch when (IsNativeAot)
+        {
+            return CreateRasterShaderCaptureContext(sourceDrawingContext, pixelSize);
+        }
+    }
+
+    private static (SKSurface Surface, IDisposable Owner, IDisposable? DrawingContext) CreateRasterShaderCaptureContext(
+        object sourceDrawingContext,
+        PixelSize pixelSize)
+    {
+        var surface = SKSurface.Create(
+                new SKImageInfo(
+                    Math.Max(pixelSize.Width, 1),
+                    Math.Max(pixelSize.Height, 1),
+                    SKImageInfo.PlatformColorType,
+                    SKAlphaType.Premul))
+            ?? throw new InvalidOperationException("Skia failed to create a raster shader capture surface.");
+
+        var owner = new ShaderCaptureOwner(surface);
+        surface.Canvas.Clear(SKColors.Transparent);
+        surface.Canvas.ResetMatrix();
+        surface.Canvas.ClipRect(SKRect.Create(Math.Max(pixelSize.Width, 1), Math.Max(pixelSize.Height, 1)));
+        return (surface, owner, null);
     }
 
     private static bool TryCreateServerVisualSnapshot(IEffect effect, out SKImage? snapshot)
@@ -1771,15 +1868,33 @@ public static class EffectorRuntime
             return null;
         }
 
+        var surfaceField = s_skiaDrawingContextCreateInfoType.GetField("Surface", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var scaleDrawingToDpiField = s_skiaDrawingContextCreateInfoType.GetField("ScaleDrawingToDpi", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var dpiField = s_skiaDrawingContextCreateInfoType.GetField("Dpi", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var disableSubpixelTextRenderingField = s_skiaDrawingContextCreateInfoType.GetField("DisableSubpixelTextRendering", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var grContextField = s_skiaDrawingContextCreateInfoType.GetField("GrContext", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var gpuField = s_skiaDrawingContextCreateInfoType.GetField("Gpu", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var currentSessionField = s_skiaDrawingContextCreateInfoType.GetField("CurrentSession", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (surfaceField is null ||
+            scaleDrawingToDpiField is null ||
+            dpiField is null ||
+            disableSubpixelTextRenderingField is null ||
+            grContextField is null ||
+            gpuField is null ||
+            currentSessionField is null)
+        {
+            return null;
+        }
+
         var createInfo = Activator.CreateInstance(s_skiaDrawingContextCreateInfoType)
             ?? throw new InvalidOperationException("Failed to create Avalonia.Skia.DrawingContextImpl.CreateInfo.");
-        s_skiaDrawingContextCreateInfoType.GetField("Surface")!.SetValue(createInfo, surface);
-        s_skiaDrawingContextCreateInfoType.GetField("ScaleDrawingToDpi")!.SetValue(createInfo, false);
-        s_skiaDrawingContextCreateInfoType.GetField("Dpi")!.SetValue(createInfo, new Vector(96, 96));
-        s_skiaDrawingContextCreateInfoType.GetField("DisableSubpixelTextRendering")!.SetValue(createInfo, false);
-        s_skiaDrawingContextCreateInfoType.GetField("GrContext")!.SetValue(createInfo, null);
-        s_skiaDrawingContextCreateInfoType.GetField("Gpu")!.SetValue(createInfo, null);
-        s_skiaDrawingContextCreateInfoType.GetField("CurrentSession")!.SetValue(createInfo, null);
+        surfaceField.SetValue(createInfo, surface);
+        scaleDrawingToDpiField.SetValue(createInfo, false);
+        dpiField.SetValue(createInfo, new Vector(96, 96));
+        disableSubpixelTextRenderingField.SetValue(createInfo, false);
+        grContextField.SetValue(createInfo, null);
+        gpuField.SetValue(createInfo, null);
+        currentSessionField.SetValue(createInfo, null);
 
         using var drawingContext = (IDisposable)s_skiaDrawingContextCtor.Invoke(new object?[] { createInfo, Array.Empty<IDisposable>() });
         var drawBitmapMethod = drawingContext.GetType().GetMethod(
@@ -2347,6 +2462,70 @@ public static class EffectorRuntime
         var path = Path.Combine(ShaderSnapshotDir!, effect.GetType().Name + ".png");
         using var stream = File.Open(path, FileMode.Create, FileAccess.Write, FileShare.Read);
         data.SaveTo(stream);
+    }
+
+    private static void TraceShaderPhase(IEffect effect, string phase)
+    {
+        if (string.IsNullOrWhiteSpace(ShaderTracePath))
+        {
+            return;
+        }
+
+        var line =
+            DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+            " | phase | " + effect.GetType().FullName +
+            " | " + phase +
+            Environment.NewLine;
+        File.AppendAllText(ShaderTracePath!, line);
+    }
+
+    private static void TraceShaderGlobalPhase(object drawingContext, string phase)
+    {
+        if (string.IsNullOrWhiteSpace(ShaderTracePath))
+        {
+            return;
+        }
+
+        var line =
+            DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+            " | global-phase | " + drawingContext.GetType().FullName +
+            " | " + phase +
+            Environment.NewLine;
+        File.AppendAllText(ShaderTracePath!, line);
+    }
+
+    private static void TraceShaderStackPhase(IEffect effect, object drawingContext, string phase, int stackDepth)
+    {
+        if (string.IsNullOrWhiteSpace(ShaderTracePath))
+        {
+            return;
+        }
+
+        var line =
+            DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+            " | stack-phase | " + effect.GetType().FullName +
+            " | context=" + drawingContext.GetType().FullName +
+            " | depth=" + stackDepth.ToString(CultureInfo.InvariantCulture) +
+            " | " + phase +
+            Environment.NewLine;
+        File.AppendAllText(ShaderTracePath!, line);
+    }
+
+    private static void TraceShaderError(IEffect effect, string phase, Exception exception)
+    {
+        if (string.IsNullOrWhiteSpace(ShaderTracePath))
+        {
+            return;
+        }
+
+        var line =
+            DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+            " | error | " + effect.GetType().FullName +
+            " | phase=" + phase +
+            " | type=" + exception.GetType().FullName +
+            " | message=" + exception.Message.Replace(Environment.NewLine, " ") +
+            Environment.NewLine;
+        File.AppendAllText(ShaderTracePath!, line);
     }
 
     private static string Format(SKRect rect) =>
