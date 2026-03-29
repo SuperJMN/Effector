@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Globalization;
 using System.Linq;
@@ -13,7 +14,6 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.VisualTree;
-using MonoMod.RuntimeDetour;
 using SkiaSharp;
 
 namespace Effector;
@@ -40,10 +40,8 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, Queue<Rect>> RenderThreadEffectBoundsByType = new();
     private static readonly Dictionary<Type, Queue<object>> RenderThreadProxiesByType = new();
     private static readonly Dictionary<Type, Queue<object>> RenderThreadVisualsByType = new();
-    private static readonly List<IDisposable> Hooks = new();
     [ThreadStatic] private static bool s_suppressShaderEffectsForVisualSnapshot;
     private static bool s_initialized;
-    private static bool s_basePatched;
     private static bool s_skiaPatched;
     private static Type? s_skiaDrawingContextType;
     private static Type? s_skiaDrawingContextCreateInfoType;
@@ -60,51 +58,8 @@ public static class EffectorRuntime
     private static FieldInfo? s_skiaCanvasBackingField;
     private static FieldInfo? s_skiaSurfaceBackingField;
     private static MethodInfo? s_skiaCreateLayerMethod;
-    private static PropertyInfo? s_skiaCanvasProperty;
-    private static PropertyInfo? s_skiaSurfaceProperty;
     private static PropertyInfo? s_skiaRenderOptionsProperty;
-    private static PropertyInfo? s_skiaTransformProperty;
-    private static FieldInfo? s_compositorProxyImplField;
-    private static Type? s_effectAnimatorType;
     private static ConstructorInfo? s_effectAnimatorDisposeSubjectCtor;
-    private static PropertyInfo? s_serverCompositionVisualEffectProperty;
-    private static MethodInfo? s_serverCompositionVisualGetEffectBoundsMethod;
-    private static MethodInfo? s_ltrbRectToRectMethod;
-
-    private delegate IImmutableEffect ToImmutableContinuation(IEffect effect);
-    private delegate IImmutableEffect ToImmutableDetour(ToImmutableContinuation orig, IEffect effect);
-    private delegate IEffect ParseContinuation(string text);
-    private delegate IEffect ParseDetour(ParseContinuation orig, string text);
-    private delegate Thickness GetEffectOutputPaddingContinuation(IEffect? effect);
-    private delegate Thickness GetEffectOutputPaddingDetour(GetEffectOutputPaddingContinuation orig, IEffect? effect);
-    private delegate IObservable<IEffect?> EffectTransitionContinuation(EffectTransition instance, IObservable<double> progress, IEffect? oldValue, IEffect? newValue);
-    private delegate IObservable<IEffect?> EffectTransitionDetour(EffectTransitionContinuation orig, EffectTransition instance, IObservable<double> progress, IEffect? oldValue, IEffect? newValue);
-    private delegate IDisposable? EffectAnimatorApplyContinuation(object instance, Animation animation, Animatable control, object? clock, IObservable<bool> match, Action? onComplete);
-    private delegate IDisposable? EffectAnimatorApplyDetour(EffectAnimatorApplyContinuation orig, object instance, Animation animation, Animatable control, object? clock, IObservable<bool> match, Action? onComplete);
-    private delegate IEffect? EffectAnimatorInterpolateContinuation(object instance, double progress, IEffect? oldValue, IEffect? newValue);
-    private delegate IEffect? EffectAnimatorInterpolateDetour(EffectAnimatorInterpolateContinuation orig, object instance, double progress, IEffect? oldValue, IEffect? newValue);
-    private delegate bool ServerPushEffectContinuation(object instance, object canvas);
-    private delegate bool ServerPushEffectDetour(ServerPushEffectContinuation orig, object instance, object canvas);
-    private delegate void PushEffectContinuation(object instance, Rect? effectClipRect, IEffect effect);
-    private delegate void PushEffectDetour(PushEffectContinuation orig, object instance, Rect? effectClipRect, IEffect effect);
-    private delegate void PopEffectContinuation(object instance);
-    private delegate void PopEffectDetour(PopEffectContinuation orig, object instance);
-    private delegate void SetTransformContinuation(object instance, Matrix value);
-    private delegate void SetTransformDetour(SetTransformContinuation orig, object instance, Matrix value);
-    private delegate SKCanvas CanvasGetterContinuation(object instance);
-    private delegate SKCanvas CanvasGetterDetour(CanvasGetterContinuation orig, object instance);
-    private delegate SKSurface? SurfaceGetterContinuation(object instance);
-    private delegate SKSurface? SurfaceGetterDetour(SurfaceGetterContinuation orig, object instance);
-    private delegate void DrawBitmapContinuation(object instance, object source, double opacity, Rect sourceRect, Rect destRect);
-    private delegate void DrawBitmapDetour(DrawBitmapContinuation orig, object instance, object source, double opacity, Rect sourceRect, Rect destRect);
-    private delegate void DrawRectangleContinuation(object instance, object? brush, object? pen, RoundedRect rect, BoxShadows boxShadows);
-    private delegate void DrawRectangleDetour(DrawRectangleContinuation orig, object instance, object? brush, object? pen, RoundedRect rect, BoxShadows boxShadows);
-    private delegate void DrawGlyphRunContinuation(object instance, object? foreground, object glyphRun);
-    private delegate void DrawGlyphRunDetour(DrawGlyphRunContinuation orig, object instance, object? foreground, object glyphRun);
-    private delegate void PushClipContinuation(object instance, Rect clip);
-    private delegate void PushClipDetour(PushClipContinuation orig, object instance, Rect clip);
-    private delegate SKImageFilter? CreateEffectContinuation(object instance, IEffect effect);
-    private delegate SKImageFilter? CreateEffectDetour(CreateEffectContinuation orig, object instance, IEffect effect);
 
     private sealed class EffectBoundsHolder
     {
@@ -177,13 +132,6 @@ public static class EffectorRuntime
             }
 
             s_initialized = true;
-            AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
-            PatchAvaloniaBase();
-
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                TryPatchSkia(assembly);
-            }
         }
     }
 
@@ -194,8 +142,11 @@ public static class EffectorRuntime
         DirectRuntimeShadersOptIn || DirectRuntimeShadersEnabledByDefault;
 
     public static void Register(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor | DynamicallyAccessedMemberTypes.PublicProperties)]
         Type mutableType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
         Type immutableType,
+        Func<IEffect> createMutable,
         Func<IEffect, IImmutableEffect> freeze,
         Func<IEffect, Thickness> padding,
         Func<IEffect, SkiaEffectContext, SKImageFilter?> createFilter,
@@ -215,7 +166,14 @@ public static class EffectorRuntime
 
         lock (Sync)
         {
-            var descriptor = new EffectorEffectDescriptor(mutableType, immutableType, freeze, padding, createFilter, createShaderEffect);
+            if (Descriptors.Keys.Any(existing =>
+                    string.Equals(existing.FullName, mutableType.FullName, StringComparison.Ordinal) ||
+                    string.Equals(existing.FullName, immutableType.FullName, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            var descriptor = new EffectorEffectDescriptor(mutableType, immutableType, createMutable, freeze, padding, createFilter, createShaderEffect);
             Descriptors[mutableType] = descriptor;
             Descriptors[immutableType] = descriptor;
 
@@ -230,6 +188,8 @@ public static class EffectorRuntime
         {
             throw new ArgumentNullException(nameof(effect));
         }
+
+        EnsureGeneratedEffectsRegistered();
 
         lock (Sync)
         {
@@ -297,6 +257,289 @@ public static class EffectorRuntime
         }
     }
 
+    public static IImmutableEffect ToImmutablePatched(IEffect effect)
+    {
+        _ = effect ?? throw new ArgumentNullException(nameof(effect));
+
+        if (TryFreeze(effect, out var frozen))
+        {
+            return frozen;
+        }
+
+        if (effect is IImmutableEffect immutable)
+        {
+            return immutable;
+        }
+
+        if (effect is IMutableEffect mutable)
+        {
+            var toImmutable = typeof(IMutableEffect).GetMethod(
+                "ToImmutable",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException(typeof(IMutableEffect).FullName, "ToImmutable");
+            return (IImmutableEffect)(toImmutable.Invoke(mutable, Array.Empty<object>())!);
+        }
+
+        return (IImmutableEffect)effect;
+    }
+
+    public static Thickness GetEffectOutputPaddingPatched(IEffect? effect)
+    {
+        if (effect is null)
+        {
+            return default;
+        }
+
+        if (TryGetPadding(effect, out var padding))
+        {
+            return padding;
+        }
+
+        if (effect is IBlurEffect blur)
+        {
+            return new Thickness(AdjustPaddingRadius(blur.Radius));
+        }
+
+        if (effect is IDropShadowEffect dropShadowEffect)
+        {
+            var radius = AdjustPaddingRadius(dropShadowEffect.BlurRadius);
+            var rc = new Rect(-radius, -radius, radius * 2, radius * 2);
+            rc = rc.Translate(new Vector(dropShadowEffect.OffsetX, dropShadowEffect.OffsetY));
+            return new Thickness(
+                Math.Max(0d, -rc.X),
+                Math.Max(0d, -rc.Y),
+                Math.Max(0d, rc.Right),
+                Math.Max(0d, rc.Bottom));
+        }
+
+        throw new ArgumentException("Unknown effect type: " + effect.GetType());
+    }
+
+    public static IEffect ParseEffectPatched(string s)
+    {
+        _ = s ?? throw new ArgumentNullException(nameof(s));
+
+        if (TryParse(s, out var customEffect) && customEffect is not null)
+        {
+            return customEffect;
+        }
+
+        var trimmed = s.Trim();
+        if (trimmed.StartsWith("blur(", StringComparison.OrdinalIgnoreCase) && trimmed.EndsWith(")", StringComparison.Ordinal))
+        {
+            var payload = trimmed.Substring(5, trimmed.Length - 6).Trim();
+            if (double.TryParse(payload, NumberStyles.Float, CultureInfo.InvariantCulture, out var radius))
+            {
+                return new ImmutableBlurEffect(radius);
+            }
+        }
+
+        if (trimmed.StartsWith("drop-shadow(", StringComparison.OrdinalIgnoreCase) && trimmed.EndsWith(")", StringComparison.Ordinal))
+        {
+            var payload = trimmed.Substring(12, trimmed.Length - 13).Trim();
+            var parts = payload.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 &&
+                double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var offsetX) &&
+                double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var offsetY))
+            {
+                double blurRadius = 0d;
+                var color = Colors.Black;
+
+                if (parts.Length >= 3)
+                {
+                    if (double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedBlur))
+                    {
+                        blurRadius = parsedBlur;
+                        if (parts.Length >= 4)
+                        {
+                            var colorText = string.Join(" ", parts.Skip(3));
+                            if (!Color.TryParse(colorText, out color))
+                            {
+                                throw new ArgumentException("Unable to parse effect: " + s);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var colorText = string.Join(" ", parts.Skip(2));
+                        if (!Color.TryParse(colorText, out color))
+                        {
+                            throw new ArgumentException("Unable to parse effect: " + s);
+                        }
+                    }
+                }
+
+                return new ImmutableDropShadowEffect(offsetX, offsetY, blurRadius, color, 1d);
+            }
+        }
+
+        throw new ArgumentException("Unable to parse effect: " + s);
+    }
+
+    public static bool TryCreateTransitionObservable(
+        IObservable<double> progress,
+        Easing easing,
+        IEffect? oldValue,
+        IEffect? newValue,
+        out IObservable<IEffect?>? observable)
+    {
+        if (IsRegisteredEffect(oldValue) || IsRegisteredEffect(newValue))
+        {
+            observable = new EffectorEffectTransitionObservable(progress, easing, oldValue, newValue);
+            return true;
+        }
+
+        observable = null;
+        return false;
+    }
+
+    public static bool TryApplyCustomEffectAnimator(
+        object animator,
+        Animation animation,
+        Animatable control,
+        object? clock,
+        IObservable<bool> match,
+        Action? onComplete,
+        out IDisposable? disposable)
+    {
+        if (!SupportsCustomEffectAnimation(animator))
+        {
+            disposable = null;
+            return false;
+        }
+
+        EnsureInitialized();
+        EnsureEffectAnimatorMetadata(animator);
+
+        var subject = s_effectAnimatorDisposeSubjectCtor.Invoke(new object?[] { animator, animation, control, clock, onComplete });
+        disposable = new EffectorCompositeDisposable(
+            match.Subscribe((IObserver<bool>)subject),
+            (IDisposable)subject);
+        return true;
+    }
+
+    public static bool TryInterpolateEffect(double progress, IEffect? oldValue, IEffect? newValue, out IEffect? effect) =>
+        TryInterpolate(progress, oldValue, newValue, out effect);
+
+    public static void RecordRenderThreadEffect(IEffect? effect, object proxy, Rect bounds, object visual)
+    {
+        if (effect is null || s_suppressShaderEffectsForVisualSnapshot)
+        {
+            return;
+        }
+
+        if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor?.CreateShaderEffect is null)
+        {
+            return;
+        }
+
+        StoreRenderThreadProxy(effect, proxy);
+        StoreRenderThreadVisual(effect, visual);
+        StoreRenderThreadEffectBounds(effect, bounds);
+    }
+
+    public static SKImageFilter? CreateEffectPatched(IEffect effect, double currentOpacity, bool useOpacitySaveLayer)
+    {
+        _ = effect ?? throw new ArgumentNullException(nameof(effect));
+
+        var context = new SkiaEffectContext(currentOpacity, useOpacitySaveLayer);
+        if (TryCreateFilter(effect, context, out var customFilter))
+        {
+            return customFilter;
+        }
+
+        if (effect is IBlurEffect blur)
+        {
+            if (blur.Radius <= 0)
+            {
+                return null;
+            }
+
+            var sigma = SkBlurRadiusToSigma(blur.Radius);
+            return SKImageFilter.CreateBlur(sigma, sigma);
+        }
+
+        if (effect is IDropShadowEffect drop)
+        {
+            var sigma = drop.BlurRadius > 0 ? SkBlurRadiusToSigma(drop.BlurRadius) : 0f;
+            var alpha = drop.Color.A * drop.Opacity;
+            if (!useOpacitySaveLayer)
+            {
+                alpha *= currentOpacity;
+            }
+
+            var color = new SKColor(
+                drop.Color.R,
+                drop.Color.G,
+                drop.Color.B,
+                (byte)Math.Max(0d, Math.Min(255d, alpha)));
+            return SKImageFilter.CreateDropShadow((float)drop.OffsetX, (float)drop.OffsetY, sigma, sigma, color);
+        }
+
+        return null;
+    }
+
+    public static bool TryBeginShaderEffectPatched(object drawingContext, Rect? effectClipRect, IEffect effect)
+    {
+        EnsureInitialized();
+        EnsureSkiaMetadata(drawingContext);
+        return TryBeginShaderEffect(drawingContext, effectClipRect, effect);
+    }
+
+    public static bool TryEndShaderEffectPatched(object drawingContext)
+    {
+        EnsureInitialized();
+        EnsureSkiaMetadata(drawingContext);
+        return TryEndShaderEffect(drawingContext);
+    }
+
+    public static bool TryGetActiveShaderCanvas(object drawingContext, out SKCanvas canvas)
+    {
+        lock (Sync)
+        {
+            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
+            {
+                canvas = stack.Peek().Surface.Canvas;
+                return true;
+            }
+        }
+
+        canvas = null!;
+        return false;
+    }
+
+    public static bool TryGetActiveShaderSurface(object drawingContext, out SKSurface? surface)
+    {
+        lock (Sync)
+        {
+            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
+            {
+                surface = stack.Peek().Surface;
+                return true;
+            }
+        }
+
+        surface = null;
+        return false;
+    }
+
+    public static Matrix AdjustTransformForActiveShaderFrame(object drawingContext, Matrix currentTransform)
+    {
+        lock (Sync)
+        {
+            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
+            {
+                var frame = stack.Peek();
+                return Matrix.CreateTranslation(-frame.EffectBounds.Left, -frame.EffectBounds.Top) * currentTransform;
+            }
+        }
+
+        return currentTransform;
+    }
+
+    public static SKRect ToSKRectPatched(Rect rect) =>
+        new((float)rect.X, (float)rect.Y, (float)(rect.X + rect.Width), (float)(rect.Y + rect.Height));
+
     internal static IEffect? InterpolateOrStep(double progress, IEffect? oldValue, IEffect? newValue)
     {
         if (TryInterpolate(progress, oldValue, newValue, out var effect))
@@ -344,9 +587,11 @@ public static class EffectorRuntime
         return true;
     }
 
-    internal static bool TryParse(string text, out IEffect? effect)
+    public static bool TryParse(string text, out IEffect? effect)
     {
         effect = null;
+
+        EnsureGeneratedEffectsRegistered();
 
         if (!EffectorEffectValueSupport.TryParseEffectInvocation(text, out var effectName, out _))
         {
@@ -394,6 +639,30 @@ public static class EffectorRuntime
         }
 
         filter = descriptor.CreateFilter(effect, CreateContext(drawingContext));
+        return true;
+    }
+
+    public static bool TryCreateFilter(IEffect effect, SkiaEffectContext context, out SKImageFilter? filter)
+    {
+        if (effect is null)
+        {
+            throw new ArgumentNullException(nameof(effect));
+        }
+
+        EffectorEffectDescriptor? descriptor;
+
+        lock (Sync)
+        {
+            Descriptors.TryGetValue(effect.GetType(), out descriptor);
+        }
+
+        if (descriptor is null)
+        {
+            filter = null;
+            return false;
+        }
+
+        filter = descriptor.CreateFilter(effect, context);
         return true;
     }
 
@@ -806,7 +1075,9 @@ public static class EffectorRuntime
         }
     }
 
-    public static object CreateFactory(Type factoryType)
+    public static object CreateFactory(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
+        Type factoryType)
     {
         if (factoryType is null)
         {
@@ -861,101 +1132,28 @@ public static class EffectorRuntime
         return true;
     }
 
-    private static void OnAssemblyLoad(object? sender, AssemblyLoadEventArgs args)
-    {
-        lock (Sync)
-        {
-            TryPatchSkia(args.LoadedAssembly);
-        }
-    }
-
-    private static void PatchAvaloniaBase()
-    {
-        if (s_basePatched)
-        {
-            return;
-        }
-
-        var avaloniaBase = typeof(Visual).Assembly;
-        ValidateVersion(avaloniaBase, "Avalonia.Base");
-
-        var effectExtensionsType = avaloniaBase.GetType("Avalonia.Media.EffectExtensions", throwOnError: true)!;
-        var effectType = avaloniaBase.GetType("Avalonia.Media.Effect", throwOnError: true)!;
-        var effectTransitionType = avaloniaBase.GetType("Avalonia.Animation.EffectTransition", throwOnError: true)!;
-        var effectAnimatorType = avaloniaBase.GetType("Avalonia.Animation.Animators.EffectAnimator", throwOnError: true)!;
-        var toImmutable = effectExtensionsType.GetMethod(
-            "ToImmutable",
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            types: new[] { typeof(IEffect) },
-            modifiers: null)!;
-        var parse = effectType.GetMethod(
-            "Parse",
-            BindingFlags.Static | BindingFlags.Public,
-            binder: null,
-            types: new[] { typeof(string) },
-            modifiers: null)!;
-        var getPadding = effectExtensionsType.GetMethod(
-            "GetEffectOutputPadding",
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            types: new[] { typeof(IEffect) },
-            modifiers: null)!;
-        var serverCompositionVisualType = avaloniaBase.GetType(
-            "Avalonia.Rendering.Composition.Server.ServerCompositionVisual",
-            throwOnError: true)!;
-        var compositorDrawingContextProxyType = avaloniaBase.GetType(
-            "Avalonia.Rendering.Composition.Server.CompositorDrawingContextProxy",
-            throwOnError: true)!;
-        var serverPushEffect = serverCompositionVisualType.GetMethod(
-            "PushEffect",
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            binder: null,
-            types: new[] { compositorDrawingContextProxyType },
-            modifiers: null)!;
-        var doTransition = effectTransitionType.GetMethod(
-            "DoTransition",
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            binder: null,
-            types: new[] { typeof(IObservable<double>), typeof(IEffect), typeof(IEffect) },
-            modifiers: null)!;
-        var apply = effectAnimatorType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Single(candidate => candidate.Name == "Apply" && candidate.GetParameters().Length == 5);
-        var interpolate = effectAnimatorType.GetMethod(
-            "Interpolate",
-            BindingFlags.Instance | BindingFlags.Public,
-            binder: null,
-            types: new[] { typeof(double), typeof(IEffect), typeof(IEffect) },
-            modifiers: null)!;
-
-        var disposeSubjectType = avaloniaBase.GetType("Avalonia.Animation.DisposeAnimationInstanceSubject`1", throwOnError: true)!;
-        s_effectAnimatorType = effectAnimatorType;
-        s_effectAnimatorDisposeSubjectCtor = disposeSubjectType.MakeGenericType(typeof(IEffect)).GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Single();
-        s_serverCompositionVisualEffectProperty = serverCompositionVisualType.GetProperty(
-            "Effect",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new MissingMemberException(serverCompositionVisualType.FullName, "Effect");
-        s_serverCompositionVisualGetEffectBoundsMethod = serverCompositionVisualType.GetMethod(
-            "GetEffectBounds",
-            BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(serverCompositionVisualType.FullName, "GetEffectBounds");
-        s_ltrbRectToRectMethod = s_serverCompositionVisualGetEffectBoundsMethod.ReturnType.GetMethod(
-            "ToRect",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(s_serverCompositionVisualGetEffectBoundsMethod.ReturnType.FullName, "ToRect");
-        s_compositorProxyImplField = compositorDrawingContextProxyType.GetField("_impl", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new MissingFieldException(compositorDrawingContextProxyType.FullName, "_impl");
-
-        Hooks.Add(new Hook(toImmutable, new ToImmutableDetour(ToImmutableHook)));
-        Hooks.Add(new Hook(parse, new ParseDetour(ParseHook)));
-        Hooks.Add(new Hook(getPadding, new GetEffectOutputPaddingDetour(GetEffectOutputPaddingHook)));
-        Hooks.Add(new Hook(serverPushEffect, new ServerPushEffectDetour(ServerPushEffectHook)));
-        Hooks.Add(new Hook(doTransition, new EffectTransitionDetour(EffectTransitionHook)));
-        Hooks.Add(new Hook(apply, new EffectAnimatorApplyDetour(EffectAnimatorApplyHook)));
-        Hooks.Add(new Hook(interpolate, new EffectAnimatorInterpolateDetour(EffectAnimatorInterpolateHook)));
-        s_basePatched = true;
-    }
-
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicMethods |
+        DynamicallyAccessedMemberTypes.NonPublicMethods |
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.NonPublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.NonPublicFields |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.NonPublicProperties,
+        "Avalonia.Skia.DrawingContextImpl",
+        "Avalonia.Skia")]
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicMethods |
+        DynamicallyAccessedMemberTypes.NonPublicMethods |
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.NonPublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.NonPublicFields |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.NonPublicProperties,
+        "Avalonia.Skia.DrawingContextImpl/CreateInfo",
+        "Avalonia.Skia")]
     private static void TryPatchSkia(Assembly assembly)
     {
         if (s_skiaPatched || assembly.GetName().Name != "Avalonia.Skia")
@@ -978,14 +1176,6 @@ public static class EffectorRuntime
             binder: null,
             types: Type.EmptyTypes,
             modifiers: null)!;
-        var getCanvas = drawingContextType.GetProperty(
-            "Canvas",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetMethod
-            ?? throw new MissingMethodException(drawingContextType.FullName, "get_Canvas");
-        var getSurface = drawingContextType.GetProperty(
-            "Surface",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetMethod
-            ?? throw new MissingMethodException(drawingContextType.FullName, "get_Surface");
         var drawBitmap = drawingContextType.GetMethod(
             "DrawBitmap",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
@@ -1010,10 +1200,6 @@ public static class EffectorRuntime
             binder: null,
             types: new[] { typeof(Rect) },
             modifiers: null)!;
-        var setTransform = drawingContextType.GetProperty(
-            "Transform",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.SetMethod
-            ?? throw new MissingMethodException(drawingContextType.FullName, "set_Transform");
         var createEffect = drawingContextType.GetMethod(
             "CreateEffect",
             BindingFlags.Instance | BindingFlags.NonPublic,
@@ -1061,14 +1247,6 @@ public static class EffectorRuntime
         s_skiaSurfaceBackingField = drawingContextType.GetField("<Surface>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? s_skiaBaseSurfaceField;
         s_skiaCreateLayerMethod = createLayer;
-        s_skiaCanvasProperty = drawingContextType.GetProperty(
-            "Canvas",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new MissingMemberException(drawingContextType.FullName, "Canvas");
-        s_skiaSurfaceProperty = drawingContextType.GetProperty(
-            "Surface",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new MissingMemberException(drawingContextType.FullName, "Surface");
         s_skiaDrawingContextCreateInfoType = createInfoType;
         s_skiaDrawingContextCtor = drawingContextCtor;
         s_skiaDrawingContextType = drawingContextType;
@@ -1076,26 +1254,52 @@ public static class EffectorRuntime
             "RenderOptions",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             ?? throw new MissingMemberException(drawingContextType.FullName, "RenderOptions");
-        s_skiaTransformProperty = drawingContextType.GetProperty(
-            "Transform",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new MissingMemberException(drawingContextType.FullName, "Transform");
-
-        Hooks.Add(new Hook(pushEffect, new PushEffectDetour(PushEffectHook)));
-        Hooks.Add(new Hook(popEffect, new PopEffectDetour(PopEffectHook)));
-        Hooks.Add(new Hook(getCanvas, new CanvasGetterDetour(CanvasGetterHook)));
-        Hooks.Add(new Hook(getSurface, new SurfaceGetterDetour(SurfaceGetterHook)));
-        Hooks.Add(new Hook(drawBitmap, new DrawBitmapDetour(DrawBitmapHook)));
-        Hooks.Add(new Hook(drawRectangle, new DrawRectangleDetour(DrawRectangleHook)));
-        Hooks.Add(new Hook(drawGlyphRun, new DrawGlyphRunDetour(DrawGlyphRunHook)));
-        Hooks.Add(new Hook(pushClip, new PushClipDetour(PushClipHook)));
-        Hooks.Add(new Hook(setTransform, new SetTransformDetour(SetTransformHook)));
-        Hooks.Add(new Hook(createEffect, new CreateEffectDetour(CreateEffectHook)));
         s_skiaPatched = true;
+    }
+
+    [DynamicDependency(
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.NonPublicConstructors,
+        "Avalonia.Animation.DisposeAnimationInstanceSubject`1",
+        "Avalonia.Base")]
+    private static void EnsureEffectAnimatorMetadata(object animator)
+    {
+        if (animator is null)
+        {
+            throw new ArgumentNullException(nameof(animator));
+        }
+
+        if (s_effectAnimatorDisposeSubjectCtor is not null)
+        {
+            return;
+        }
+
+        lock (Sync)
+        {
+            if (s_effectAnimatorDisposeSubjectCtor is not null)
+            {
+                return;
+            }
+
+            var avaloniaBase = animator.GetType().Assembly;
+            ValidateVersion(avaloniaBase, "Avalonia.Base");
+
+            var disposeSubjectType = avaloniaBase.GetType(
+                "Avalonia.Animation.DisposeAnimationInstanceSubject`1",
+                throwOnError: true)
+                ?? throw new MissingMemberException("Avalonia.Animation.DisposeAnimationInstanceSubject`1");
+
+            s_effectAnimatorDisposeSubjectCtor = disposeSubjectType
+                .MakeGenericType(typeof(IEffect))
+                .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Single();
+        }
     }
 
     private static SkiaEffectContext CreateContext(object drawingContext)
     {
+        EnsureSkiaMetadata(drawingContext);
+
         if (s_skiaDrawingContextType is null ||
             s_skiaCurrentOpacityField is null ||
             s_skiaUseOpacitySaveLayerField is null)
@@ -1111,6 +1315,29 @@ public static class EffectorRuntime
         var currentOpacity = Convert.ToDouble(s_skiaCurrentOpacityField.GetValue(drawingContext)!);
         var useOpacitySaveLayer = Convert.ToBoolean(s_skiaUseOpacitySaveLayerField.GetValue(drawingContext)!);
         return new SkiaEffectContext(currentOpacity, useOpacitySaveLayer);
+    }
+
+    private static void EnsureSkiaMetadata(object drawingContext)
+    {
+        if (drawingContext is null)
+        {
+            throw new ArgumentNullException(nameof(drawingContext));
+        }
+
+        if (s_skiaPatched)
+        {
+            return;
+        }
+
+        lock (Sync)
+        {
+            if (s_skiaPatched)
+            {
+                return;
+            }
+
+            TryPatchSkia(drawingContext.GetType().Assembly);
+        }
     }
 
     private static void ValidateVersion(Assembly assembly, string assemblyName)
@@ -1142,6 +1369,11 @@ public static class EffectorRuntime
 
         if (DescriptorsByName.TryGetValue(alias, out var existing) && !ReferenceEquals(existing, descriptor))
         {
+            if (string.Equals(existing.MutableType.FullName, descriptor.MutableType.FullName, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             throw new InvalidOperationException(
                 $"Effect parse alias '{alias}' is already registered for '{existing.MutableType.FullName}'.");
         }
@@ -1149,262 +1381,9 @@ public static class EffectorRuntime
         DescriptorsByName[alias] = descriptor;
     }
 
-    private static IImmutableEffect ToImmutableHook(ToImmutableContinuation orig, IEffect effect)
+    private static void EnsureGeneratedEffectsRegistered()
     {
-        if (TryFreeze(effect, out var frozen))
-        {
-            return frozen;
-        }
-
-        return orig(effect);
-    }
-
-    private static IEffect ParseHook(ParseContinuation orig, string text)
-    {
-        if (TryParse(text, out var effect) && effect is not null)
-        {
-            return effect;
-        }
-
-        return orig(text);
-    }
-
-    private static Thickness GetEffectOutputPaddingHook(GetEffectOutputPaddingContinuation orig, IEffect? effect)
-    {
-        if (effect is not null && TryGetPadding(effect, out var padding))
-        {
-            return padding;
-        }
-
-        return orig(effect);
-    }
-
-    private static IObservable<IEffect?> EffectTransitionHook(
-        EffectTransitionContinuation orig,
-        EffectTransition instance,
-        IObservable<double> progress,
-        IEffect? oldValue,
-        IEffect? newValue)
-    {
-        if (IsRegisteredEffect(oldValue) || IsRegisteredEffect(newValue))
-        {
-            return new EffectorEffectTransitionObservable(progress, instance.Easing, oldValue, newValue);
-        }
-
-        return orig(instance, progress, oldValue, newValue);
-    }
-
-    private static IDisposable? EffectAnimatorApplyHook(
-        EffectAnimatorApplyContinuation orig,
-        object instance,
-        Animation animation,
-        Animatable control,
-        object? clock,
-        IObservable<bool> match,
-        Action? onComplete)
-    {
-        if (!SupportsCustomEffectAnimation(instance))
-        {
-            return orig(instance, animation, control, clock, match, onComplete);
-        }
-
-        if (s_effectAnimatorDisposeSubjectCtor is null)
-        {
-            throw new InvalidOperationException("Effect animator support has not been initialized.");
-        }
-
-        var subject = s_effectAnimatorDisposeSubjectCtor.Invoke(new object?[] { instance, animation, control, clock, onComplete });
-        return new EffectorCompositeDisposable(
-            match.Subscribe((IObserver<bool>)subject),
-            (IDisposable)subject);
-    }
-
-    private static IEffect? EffectAnimatorInterpolateHook(
-        EffectAnimatorInterpolateContinuation orig,
-        object instance,
-        double progress,
-        IEffect? oldValue,
-        IEffect? newValue)
-    {
-        if (IsRegisteredEffect(oldValue) || IsRegisteredEffect(newValue))
-        {
-            return InterpolateOrStep(progress, oldValue, newValue);
-        }
-
-        return orig(instance, progress, oldValue, newValue);
-    }
-
-    private static bool ServerPushEffectHook(ServerPushEffectContinuation orig, object instance, object canvas)
-    {
-        if (s_serverCompositionVisualEffectProperty is not null &&
-            s_serverCompositionVisualGetEffectBoundsMethod is not null &&
-            s_ltrbRectToRectMethod is not null)
-        {
-            var effect = s_serverCompositionVisualEffectProperty.GetValue(instance) as IEffect;
-            if (effect is not null &&
-                TryGetDescriptor(effect.GetType(), out var descriptor) &&
-                descriptor?.CreateShaderEffect is not null)
-            {
-                if (s_suppressShaderEffectsForVisualSnapshot)
-                {
-                    return false;
-                }
-
-                StoreRenderThreadProxy(effect, canvas);
-                StoreRenderThreadVisual(effect, instance);
-                var boundsValue = s_serverCompositionVisualGetEffectBoundsMethod.Invoke(instance, Array.Empty<object>());
-                if (boundsValue is not null && s_ltrbRectToRectMethod.Invoke(boundsValue, Array.Empty<object>()) is Rect bounds)
-                {
-                    StoreRenderThreadEffectBounds(effect, bounds);
-                }
-            }
-        }
-
-        return orig(instance, canvas);
-    }
-
-    private static SKImageFilter? CreateEffectHook(CreateEffectContinuation orig, object instance, IEffect effect)
-    {
-        if (TryGetDescriptor(effect.GetType(), out var descriptor) && descriptor?.CreateShaderEffect is not null)
-        {
-            return null;
-        }
-
-        if (TryCreateFilter(effect, instance, out var filter))
-        {
-            return filter;
-        }
-
-        return orig(instance, effect);
-    }
-
-    private static void PushEffectHook(PushEffectContinuation orig, object instance, Rect? effectClipRect, IEffect effect)
-    {
-        if (TryBeginShaderEffect(instance, effectClipRect, effect))
-        {
-            return;
-        }
-
-        orig(instance, effectClipRect, effect);
-    }
-
-    private static void PopEffectHook(PopEffectContinuation orig, object instance)
-    {
-        if (TryEndShaderEffect(instance))
-        {
-            return;
-        }
-
-        orig(instance);
-    }
-
-    private static void SetTransformHook(SetTransformContinuation orig, object instance, Matrix value)
-    {
-        var before = GetCurrentCanvas(instance);
-        orig(instance, value);
-        ApplyActiveShaderFrameTransformOffset(instance);
-        if (!string.IsNullOrWhiteSpace(ShaderTracePath) && TryGetActiveShaderFrame(instance, out var frame) && GetCurrentCanvas(instance) is SKCanvas after)
-        {
-            var line =
-                DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
-                " | set-transform | effect=" + frame.Effect.GetType().Name +
-                " | requested=" + value.ToString() +
-                " | before=" + (before is null ? "null" : Format(before.TotalMatrix)) +
-                " | after=" + Format(after.TotalMatrix) +
-                Environment.NewLine;
-            File.AppendAllText(ShaderTracePath!, line);
-        }
-    }
-
-    private static SKCanvas CanvasGetterHook(CanvasGetterContinuation orig, object instance)
-    {
-        lock (Sync)
-        {
-            if (ShaderFrames.TryGetValue(instance, out var stack) && stack.Count > 0)
-            {
-                return stack.Peek().Surface.Canvas;
-            }
-        }
-
-        return orig(instance);
-    }
-
-    private static SKSurface? SurfaceGetterHook(SurfaceGetterContinuation orig, object instance)
-    {
-        lock (Sync)
-        {
-            if (ShaderFrames.TryGetValue(instance, out var stack) && stack.Count > 0)
-            {
-                return stack.Peek().Surface;
-            }
-        }
-
-        return orig(instance);
-    }
-
-    private static void DrawBitmapHook(DrawBitmapContinuation orig, object instance, object source, double opacity, Rect sourceRect, Rect destRect)
-    {
-        var matrix = GetCurrentCanvas(instance);
-        TraceActiveShaderDraw(
-            instance,
-            $"DrawBitmap source={source.GetType().Name} matrix={(matrix is null ? "null" : Format(matrix.TotalMatrix))} dest={Format(destRect)} src={Format(sourceRect)}");
-        orig(instance, source, opacity, sourceRect, destRect);
-    }
-
-    private static void DrawRectangleHook(DrawRectangleContinuation orig, object instance, object? brush, object? pen, RoundedRect rect, BoxShadows boxShadows)
-    {
-        var r = rect.Rect;
-        var matrix = GetCurrentCanvas(instance);
-        var brushDetails = brush switch
-        {
-            ISolidColorBrush solid => $"{brush.GetType().Name}({solid.Color},{solid.Opacity:0.##})",
-            IBrush b => $"{brush!.GetType().Name}(opacity={b.Opacity:0.##})",
-            null => "null",
-            _ => brush.GetType().Name
-        };
-        var penDetails = pen switch
-        {
-            IPen p => $"{pen!.GetType().Name}(thickness={p.Thickness:0.##})",
-            null => "null",
-            _ => pen.GetType().Name
-        };
-        TraceActiveShaderDraw(
-            instance,
-            $"DrawRectangle brush={brushDetails} pen={penDetails} matrix={(matrix is null ? "null" : Format(matrix.TotalMatrix))} rect={Format(r)}");
-        orig(instance, brush, pen, rect, boxShadows);
-    }
-
-    private static void DrawGlyphRunHook(DrawGlyphRunContinuation orig, object instance, object? foreground, object glyphRun)
-        => orig(instance, foreground, glyphRun);
-
-    private static void PushClipHook(PushClipContinuation orig, object instance, Rect clip)
-    {
-        TraceActiveShaderDraw(instance, $"PushClip rect={Format(clip)}");
-        orig(instance, clip);
-    }
-
-    private static void TraceActiveShaderDraw(object instance, string message)
-    {
-        if (string.IsNullOrWhiteSpace(ShaderTracePath))
-        {
-            return;
-        }
-
-        string? prefix = null;
-        lock (Sync)
-        {
-            if (!ShaderFrames.TryGetValue(instance, out var stack) || stack.Count == 0)
-            {
-                return;
-            }
-
-            var frame = stack.Peek();
-            prefix = ReferenceEquals(frame.LayerDrawingContext, instance)
-                ? "layer"
-                : "base";
-        }
-
-        File.AppendAllText(ShaderTracePath!, $"{DateTime.UtcNow:O} | draw:{prefix} | {message}{Environment.NewLine}");
+        EnsureInitialized();
     }
 
     private static bool TryGetActiveShaderFrame(object instance, out EffectorShaderEffectFrame frame)
@@ -2012,35 +1991,9 @@ public static class EffectorRuntime
         (inner.X + inner.Width) <= (outer.X + outer.Width) + tolerance &&
         (inner.Y + inner.Height) <= (outer.Y + outer.Height) + tolerance;
 
-    private static void ApplyActiveShaderFrameTransformOffset(object drawingContext)
+    public static void ApplyActiveShaderFrameTransformOffsetPatched(object drawingContext)
     {
-        if (s_skiaCanvasProperty is null)
-        {
-            return;
-        }
-
-        EffectorShaderEffectFrame? frame = null;
-        lock (Sync)
-        {
-            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
-            {
-                frame = stack.Peek();
-            }
-        }
-
-        if (frame is null)
-        {
-            return;
-        }
-
-        if (GetCurrentCanvas(drawingContext) is not SKCanvas canvas ||
-            s_skiaTransformProperty?.GetValue(drawingContext) is not Matrix currentTransform)
-        {
-            return;
-        }
-
-        var translatedTransform = Matrix.CreateTranslation(-frame.EffectBounds.Left, -frame.EffectBounds.Top) * currentTransform;
-        canvas.SetMatrix(ToSKMatrix(translatedTransform));
+        _ = drawingContext;
     }
 
     private static SKImage? CreateShaderCaptureSnapshot(EffectorShaderEffectFrame frame)
@@ -2054,10 +2007,10 @@ public static class EffectorRuntime
     }
 
     private static SKCanvas? GetCurrentCanvas(object drawingContext) =>
-        s_skiaCanvasProperty?.GetValue(drawingContext) as SKCanvas;
+        s_skiaCanvasBackingField?.GetValue(drawingContext) as SKCanvas;
 
     private static SKSurface? GetCurrentSurface(object drawingContext) =>
-        s_skiaSurfaceProperty?.GetValue(drawingContext) as SKSurface;
+        s_skiaSurfaceBackingField?.GetValue(drawingContext) as SKSurface;
 
     private static Rect Inflate(Rect rect, Thickness padding) =>
         new(
@@ -2441,6 +2394,26 @@ public static class EffectorRuntime
         DirectRuntimeShadersEnabled &&
         s_skiaGrContextField?.GetValue(drawingContext) is not null;
 
+    private static double AdjustPaddingRadius(double radius)
+    {
+        if (radius <= 0d)
+        {
+            return 0d;
+        }
+
+        return Math.Ceiling(radius) + 1d;
+    }
+
+    private static float SkBlurRadiusToSigma(double radius)
+    {
+        if (radius <= 0d)
+        {
+            return 0f;
+        }
+
+        return 0.288675f * (float)radius + 0.5f;
+    }
+
     private static bool ParseBooleanEnvironmentVariable(string variableName)
     {
         var value = Environment.GetEnvironmentVariable(variableName);
@@ -2456,7 +2429,7 @@ public static class EffectorRuntime
                bool.TryParse(value, out var enabled) && enabled;
     }
 
-    private static bool IsRegisteredEffect(IEffect? effect) =>
+    public static bool IsRegisteredEffect(IEffect? effect) =>
         effect is not null && TryGetDescriptor(effect.GetType(), out _);
 
     private static bool SupportsCustomEffectAnimation(object animator)

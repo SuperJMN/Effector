@@ -539,6 +539,7 @@ internal sealed class EffectorWeaver
         cctorIl.Emit(OpCodes.Stsfld, factoryField);
         cctorIl.Emit(OpCodes.Ret);
 
+        AddCreateMutableMethod(module, type, model);
         AddFreezeMethod(module, type, model, immutableType, factoryField);
         AddGetValuesMethod(module, type, model, immutableType);
         AddEqualityMethods(module, type, model, immutableType);
@@ -549,6 +550,23 @@ internal sealed class EffectorWeaver
         }
 
         return type;
+    }
+
+    private static MethodDefinition AddCreateMutableMethod(
+        ModuleDefinition module,
+        TypeDefinition helperType,
+        EffectDefinitionModel model)
+    {
+        var method = new MethodDefinition(
+            "CreateMutable",
+            MethodAttributes.Assembly | MethodAttributes.Static | MethodAttributes.HideBySig,
+            module.ImportReference(typeof(IEffect)));
+        helperType.Methods.Add(method);
+
+        var il = method.Body.GetILProcessor();
+        il.Emit(OpCodes.Newobj, module.ImportReference(model.EffectParameterlessConstructor));
+        il.Emit(OpCodes.Ret);
+        return method;
     }
 
     private static MethodDefinition AddFreezeMethod(
@@ -871,10 +889,12 @@ internal sealed class EffectorWeaver
         helperType.Methods.Add(method);
 
         var register = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.Register))!);
+        var createMutableDelegateCtor = module.ImportReference(typeof(Func<IEffect>).GetConstructors().Single());
         var freezeDelegateCtor = module.ImportReference(typeof(Func<IEffect, IImmutableEffect>).GetConstructors().Single());
         var paddingDelegateCtor = module.ImportReference(typeof(Func<IEffect, Thickness>).GetConstructors().Single());
         var filterDelegateCtor = module.ImportReference(typeof(Func<IEffect, SkiaEffectContext, SKImageFilter>).GetConstructors().Single());
         var shaderDelegateCtor = module.ImportReference(typeof(Func<IEffect, SkiaShaderEffectContext, SkiaShaderEffect>).GetConstructors().Single());
+        var createMutableMethod = helperType.Methods.Single(static candidate => candidate.Name == "CreateMutable");
         var freezeMethod = helperType.Methods.Single(static candidate => candidate.Name == "Freeze");
         var paddingMethod = helperType.Methods.Single(static candidate => candidate.Name == "GetPadding");
         var filterMethod = helperType.Methods.Single(static candidate => candidate.Name == "CreateFilter");
@@ -887,6 +907,10 @@ internal sealed class EffectorWeaver
         il.Emit(OpCodes.Call, module.ImportReference(typeof(Type).GetMethod(nameof(Type.GetTypeFromHandle))!));
         il.Emit(OpCodes.Ldtoken, module.ImportReference(immutableType));
         il.Emit(OpCodes.Call, module.ImportReference(typeof(Type).GetMethod(nameof(Type.GetTypeFromHandle))!));
+
+        il.Emit(OpCodes.Ldnull);
+        il.Emit(OpCodes.Ldftn, createMutableMethod);
+        il.Emit(OpCodes.Newobj, createMutableDelegateCtor);
 
         il.Emit(OpCodes.Ldnull);
         il.Emit(OpCodes.Ldftn, freezeMethod);

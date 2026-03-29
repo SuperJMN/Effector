@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using Avalonia;
@@ -11,8 +12,11 @@ namespace Effector;
 internal sealed class EffectorEffectDescriptor
 {
     public EffectorEffectDescriptor(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor | DynamicallyAccessedMemberTypes.PublicProperties)]
         Type mutableType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
         Type immutableType,
+        Func<IEffect> createMutable,
         Func<IEffect, IImmutableEffect> freeze,
         Func<IEffect, Thickness> padding,
         Func<IEffect, SkiaEffectContext, SKImageFilter?> createFilter,
@@ -20,6 +24,7 @@ internal sealed class EffectorEffectDescriptor
     {
         MutableType = mutableType ?? throw new ArgumentNullException(nameof(mutableType));
         ImmutableType = immutableType ?? throw new ArgumentNullException(nameof(immutableType));
+        CreateMutable = createMutable ?? throw new ArgumentNullException(nameof(createMutable));
         Freeze = freeze ?? throw new ArgumentNullException(nameof(freeze));
         Padding = padding ?? throw new ArgumentNullException(nameof(padding));
         CreateFilter = createFilter ?? throw new ArgumentNullException(nameof(createFilter));
@@ -34,8 +39,10 @@ internal sealed class EffectorEffectDescriptor
         Properties = BuildPropertyDescriptors(mutableType, immutableType);
     }
 
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor | DynamicallyAccessedMemberTypes.PublicProperties)]
     public Type MutableType { get; }
 
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
     public Type ImmutableType { get; }
 
     public string ParseName { get; }
@@ -43,6 +50,8 @@ internal sealed class EffectorEffectDescriptor
     public string AlternateParseName { get; }
 
     public Func<IEffect, IImmutableEffect> Freeze { get; }
+
+    public Func<IEffect> CreateMutable { get; }
 
     public Func<IEffect, Thickness> Padding { get; }
 
@@ -71,7 +80,7 @@ internal sealed class EffectorEffectDescriptor
 
     public object CreateMutableInstance()
     {
-        var instance = Activator.CreateInstance(MutableType);
+        var instance = CreateMutable();
         if (instance is null)
         {
             throw new InvalidOperationException($"Could not create effect type '{MutableType.FullName}'.");
@@ -128,7 +137,11 @@ internal sealed class EffectorEffectDescriptor
         return true;
     }
 
-    private static IReadOnlyList<EffectorEffectPropertyDescriptor> BuildPropertyDescriptors(Type mutableType, Type immutableType)
+    private static IReadOnlyList<EffectorEffectPropertyDescriptor> BuildPropertyDescriptors(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor | DynamicallyAccessedMemberTypes.PublicProperties)]
+        Type mutableType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
+        Type immutableType)
     {
         var mutableProperties = mutableType
             .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)

@@ -168,6 +168,61 @@ internal static class EffectorEffectValueSupport
             return Enum.Parse(targetType, trimmed, ignoreCase: true);
         }
 
+        if (targetType == typeof(Color))
+        {
+            return Color.Parse(trimmed);
+        }
+
+        if (targetType == typeof(Point))
+        {
+            return Point.Parse(trimmed);
+        }
+
+        if (targetType == typeof(Vector))
+        {
+            return Vector.Parse(trimmed);
+        }
+
+        if (targetType == typeof(Size))
+        {
+            return Size.Parse(trimmed);
+        }
+
+        if (targetType == typeof(Rect))
+        {
+            return Rect.Parse(trimmed);
+        }
+
+        if (targetType == typeof(Thickness))
+        {
+            return Thickness.Parse(trimmed);
+        }
+
+        if (targetType == typeof(CornerRadius))
+        {
+            return CornerRadius.Parse(trimmed);
+        }
+
+        if (targetType == typeof(RelativePoint))
+        {
+            return RelativePoint.Parse(trimmed);
+        }
+
+        if (targetType == typeof(PixelPoint))
+        {
+            return PixelPoint.Parse(trimmed);
+        }
+
+        if (targetType == typeof(PixelSize))
+        {
+            return PixelSize.Parse(trimmed);
+        }
+
+        if (targetType == typeof(Matrix))
+        {
+            return Matrix.Parse(trimmed);
+        }
+
         var converter = TypeDescriptor.GetConverter(targetType);
         if (converter is not null && converter.CanConvertFrom(typeof(string)))
         {

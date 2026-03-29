@@ -1,10 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFramework Condition="'$(PublishAot)' == 'true'">net8.0</TargetFramework>
+    <TargetFrameworks Condition="'$(PublishAot)' != 'true' and '$(TargetFramework)' == ''">net8.0;netstandard2.0</TargetFrameworks>
     <AssemblyName>Effector</AssemblyName>
     <PackageId>Effector</PackageId>
     <Description>Custom Skia-backed effect extensibility for Avalonia 11.3.12.</Description>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <GeneratePackageOnBuild Condition="'$(PublishAot)' == 'true'">false</GeneratePackageOnBuild>
     <IncludeBuildOutput>true</IncludeBuildOutput>
     <IsPackable>true</IsPackable>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
@@ -14,7 +16,6 @@
 
   <ItemGroup>
     <PackageReference Include="Avalonia" />
-    <PackageReference Include="MonoMod.RuntimeDetour" />
     <PackageReference Include="SkiaSharp" />
   </ItemGroup>
 
@@ -23,11 +24,13 @@
     <MSBuild Projects="$(_EffectorSelfWeaverProjectPath)"
              Targets="Restore"
              BuildInParallel="false"
-             Properties="Configuration=$(Configuration);DesignTimeBuild=false;BuildingProject=false" />
+             RemoveProperties="TargetFramework;TargetFrameworks;PublishAot;RuntimeIdentifier;SelfContained;PublishTrimmed;PublishSingleFile;PublishReadyToRun"
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0;GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false" />
     <MSBuild Projects="$(_EffectorSelfWeaverProjectPath)"
              Targets="Build"
              BuildInParallel="false"
-             Properties="Configuration=$(Configuration);DesignTimeBuild=false;BuildingProject=false" />
+             RemoveProperties="TargetFramework;TargetFrameworks;PublishAot;RuntimeIdentifier;SelfContained;PublishTrimmed;PublishSingleFile;PublishReadyToRun"
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0;GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false" />
   </Target>
 
   <Target Name="Effector_SelfWeave"
