@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Media;
+using Effector;
 using Effector.Build.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -336,11 +337,8 @@ public sealed class EffectorWeaverTests
             .Select(path => MetadataReference.CreateFromFile(path))
             .ToArray();
 
-    private static string GetEffectorRuntimePath()
-    {
-        var repositoryRoot = GetRepositoryRoot();
-        return Path.Combine(repositoryRoot, "src/Effector/bin/Debug/netstandard2.0/Effector.dll");
-    }
+    private static string GetEffectorRuntimePath() =>
+        typeof(SkiaEffectBase).Assembly.Location;
 
     private static string GetAvaloniaBasePath() =>
         typeof(Effect).Assembly.Location;
@@ -431,7 +429,4 @@ public sealed class EffectorWeaverTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
-
-    private static string GetRepositoryRoot() =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(typeof(EffectorWeaverTests).Assembly.Location)!, "../../../../../"));
 }
