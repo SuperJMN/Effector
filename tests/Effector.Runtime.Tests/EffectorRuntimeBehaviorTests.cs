@@ -577,6 +577,21 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void ShaderBoundsSelection_Clips_TransformedHostBounds_When_ClipRect_Is_Smaller_Than_TransformedHost_But_Larger_Than_UnclippedSize()
+    {
+        var selectMethod = typeof(EffectorRuntime).GetMethod(
+            "SelectAuthoritativeEffectRectForHostPreference",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var partiallyVisibleClipRect = new Rect(33d, 26d, 150d, 100d);
+        var transformedHostBounds = new Rect(24d, 26d, 168d, 100d);
+
+        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { partiallyVisibleClipRect, transformedHostBounds, null, true, new Size(120d, 80d) });
+
+        Assert.Equal(transformedHostBounds.Intersect(partiallyVisibleClipRect), selected);
+    }
+
+    [Fact]
     public void ShaderIntermediateSurfaceBounds_Are_Derived_From_EffectBounds_Not_DeviceClip()
     {
         var resolveMethod = typeof(EffectorRuntime).GetMethod(

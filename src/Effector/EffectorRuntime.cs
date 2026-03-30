@@ -2190,7 +2190,8 @@ public static class EffectorRuntime
 
     private static bool TryClipPreferredHostBounds(Rect? effectClipRect, Rect preferredHostBounds, Size? unclippedHostSize, out Rect clippedBounds)
     {
-        const double tolerance = 2d;
+        const double sizeTolerance = 2d;
+        const double centerTolerance = 2d;
 
         if (!effectClipRect.HasValue || effectClipRect.Value.Width <= 0d || effectClipRect.Value.Height <= 0d || !unclippedHostSize.HasValue)
         {
@@ -2199,11 +2200,16 @@ public static class EffectorRuntime
         }
 
         var clip = effectClipRect.Value;
-        var hostSize = unclippedHostSize.Value;
         var materiallyClipped =
-            clip.Width < (hostSize.Width - tolerance) ||
-            clip.Height < (hostSize.Height - tolerance);
+            clip.Width < (preferredHostBounds.Width - sizeTolerance) ||
+            clip.Height < (preferredHostBounds.Height - sizeTolerance);
         if (!materiallyClipped)
+        {
+            clippedBounds = default;
+            return false;
+        }
+
+        if (IsLikelyStalePreTransformClip(clip, preferredHostBounds, unclippedHostSize.Value, sizeTolerance, centerTolerance))
         {
             clippedBounds = default;
             return false;
@@ -2211,6 +2217,28 @@ public static class EffectorRuntime
 
         clippedBounds = preferredHostBounds.Intersect(clip);
         return clippedBounds.Width > 0d && clippedBounds.Height > 0d;
+    }
+
+    private static bool IsLikelyStalePreTransformClip(
+        Rect clip,
+        Rect preferredHostBounds,
+        Size unclippedHostSize,
+        double sizeTolerance,
+        double centerTolerance)
+    {
+        var matchesUnclippedSize =
+            Math.Abs(clip.Width - unclippedHostSize.Width) <= sizeTolerance &&
+            Math.Abs(clip.Height - unclippedHostSize.Height) <= sizeTolerance;
+        if (!matchesUnclippedSize || !RectContains(preferredHostBounds, clip, sizeTolerance))
+        {
+            return false;
+        }
+
+        var clipCenter = clip.Center;
+        var preferredCenter = preferredHostBounds.Center;
+        return
+            Math.Abs(clipCenter.X - preferredCenter.X) <= centerTolerance &&
+            Math.Abs(clipCenter.Y - preferredCenter.Y) <= centerTolerance;
     }
 
     private static bool TrySelectTightHostBounds(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds, out Rect bounds)
