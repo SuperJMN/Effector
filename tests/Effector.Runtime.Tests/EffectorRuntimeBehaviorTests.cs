@@ -495,9 +495,24 @@ public sealed class EffectorRuntimeBehaviorTests
         var staleClipRect = new Rect(48d, 36d, 120d, 80d);
         var transformedHostBounds = new Rect(24d, 26d, 168d, 100d);
 
-        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { staleClipRect, transformedHostBounds, null, true });
+        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { staleClipRect, transformedHostBounds, null, true, new Size(120d, 80d) });
 
         Assert.Equal(transformedHostBounds, selected);
+    }
+
+    [Fact]
+    public void ShaderBoundsSelection_Clips_TransformedHostBounds_When_ClipRect_Is_Materially_Smaller()
+    {
+        var selectMethod = typeof(EffectorRuntime).GetMethod(
+            "SelectAuthoritativeEffectRectForHostPreference",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var viewportClipRect = new Rect(48d, 36d, 72d, 44d);
+        var transformedHostBounds = new Rect(24d, 26d, 168d, 100d);
+
+        var selected = (Rect?)selectMethod.Invoke(null, new object?[] { viewportClipRect, transformedHostBounds, null, true, new Size(120d, 80d) });
+
+        Assert.Equal(transformedHostBounds.Intersect(viewportClipRect), selected);
     }
 
     [Fact]

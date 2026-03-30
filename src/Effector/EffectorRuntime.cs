@@ -1503,11 +1503,13 @@ public static class EffectorRuntime
         var deviceClip = ToSKRect(deviceClipBounds);
         var usedHostVisualBounds = TryGetHostVisualBounds(effect, out var hostBounds);
         var usedRenderThreadBounds = TakeRenderThreadEffectBounds(effect, out var renderBounds);
+        var preferHostBounds = ShouldPreferHostBounds(effect, out var unclippedHostSize);
         var authoritativeEffectRect = SelectAuthoritativeEffectRectCandidateWithHostPreference(
             effectClipRect,
             usedHostVisualBounds ? hostBounds : (Rect?)null,
             usedRenderThreadBounds ? renderBounds : (Rect?)null,
-            ShouldPreferHostBounds(effect));
+            preferHostBounds,
+            unclippedHostSize);
         var intermediateSurfaceDpi = s_skiaIntermediateSurfaceDpiField?.GetValue(drawingContext) is Vector vector
             ? vector
             : new Vector(96d, 96d);
@@ -2060,17 +2062,23 @@ public static class EffectorRuntime
     private static Rect? SelectAuthoritativeEffectRect(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds) =>
         SelectAuthoritativeEffectRectCandidate(effectClipRect, hostBounds, renderBounds).Rect;
 
-    private static Rect? SelectAuthoritativeEffectRectForHostPreference(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds, bool preferHostBounds) =>
-        SelectAuthoritativeEffectRectCandidateWithHostPreference(effectClipRect, hostBounds, renderBounds, preferHostBounds).Rect;
+    private static Rect? SelectAuthoritativeEffectRectForHostPreference(
+        Rect? effectClipRect,
+        Rect? hostBounds,
+        Rect? renderBounds,
+        bool preferHostBounds,
+        Size? unclippedHostSize = null) =>
+        SelectAuthoritativeEffectRectCandidateWithHostPreference(effectClipRect, hostBounds, renderBounds, preferHostBounds, unclippedHostSize).Rect;
 
     private static SelectedEffectRect SelectAuthoritativeEffectRectCandidate(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds) =>
-        SelectAuthoritativeEffectRectCandidateWithHostPreference(effectClipRect, hostBounds, renderBounds, preferHostBounds: false);
+        SelectAuthoritativeEffectRectCandidateWithHostPreference(effectClipRect, hostBounds, renderBounds, preferHostBounds: false, unclippedHostSize: null);
 
     private static SelectedEffectRect SelectAuthoritativeEffectRectCandidateWithHostPreference(
         Rect? effectClipRect,
         Rect? hostBounds,
         Rect? renderBounds,
-        bool preferHostBounds)
+        bool preferHostBounds,
+        Size? unclippedHostSize)
     {
         if (TrySelectTightHostBounds(effectClipRect, hostBounds, renderBounds, out var tightHostBounds))
         {
@@ -2079,7 +2087,13 @@ public static class EffectorRuntime
 
         if (preferHostBounds && hostBounds.HasValue && hostBounds.Value.Width > 0d && hostBounds.Value.Height > 0d)
         {
-            return new SelectedEffectRect(hostBounds, EffectRectSource.HostLogical);
+            var preferredHostBounds = hostBounds.Value;
+            if (TryClipPreferredHostBounds(effectClipRect, preferredHostBounds, unclippedHostSize, out var clippedHostBounds))
+            {
+                return new SelectedEffectRect(clippedHostBounds, EffectRectSource.HostLogical);
+            }
+
+            return new SelectedEffectRect(preferredHostBounds, EffectRectSource.HostLogical);
         }
 
         if (effectClipRect.HasValue && effectClipRect.Value.Width > 0d && effectClipRect.Value.Height > 0d)
@@ -2100,15 +2114,59 @@ public static class EffectorRuntime
         return default;
     }
 
-    private static bool ShouldPreferHostBounds(IEffect effect)
+    private static bool ShouldPreferHostBounds(IEffect effect, out Size? unclippedHostSize)
     {
+        unclippedHostSize = null;
         if (!TryGetHostVisual(effect, out var visual))
         {
             return false;
         }
 
         var renderTransform = visual.RenderTransform;
-        return renderTransform is not null && !renderTransform.Value.IsIdentity;
+        if (renderTransform is null || renderTransform.Value.IsIdentity)
+        {
+            return false;
+        }
+
+        var width = visual.Bounds.Width;
+        var height = visual.Bounds.Height;
+        if (width > 0d && height > 0d)
+        {
+            if (TryGetPadding(effect, out var padding))
+            {
+                width += padding.Left + padding.Right;
+                height += padding.Top + padding.Bottom;
+            }
+
+            unclippedHostSize = new Size(width, height);
+        }
+
+        return true;
+    }
+
+    private static bool TryClipPreferredHostBounds(Rect? effectClipRect, Rect preferredHostBounds, Size? unclippedHostSize, out Rect clippedBounds)
+    {
+        const double tolerance = 2d;
+
+        if (!effectClipRect.HasValue || effectClipRect.Value.Width <= 0d || effectClipRect.Value.Height <= 0d || !unclippedHostSize.HasValue)
+        {
+            clippedBounds = default;
+            return false;
+        }
+
+        var clip = effectClipRect.Value;
+        var hostSize = unclippedHostSize.Value;
+        var materiallyClipped =
+            clip.Width < (hostSize.Width - tolerance) ||
+            clip.Height < (hostSize.Height - tolerance);
+        if (!materiallyClipped)
+        {
+            clippedBounds = default;
+            return false;
+        }
+
+        clippedBounds = preferredHostBounds.Intersect(clip);
+        return clippedBounds.Width > 0d && clippedBounds.Height > 0d;
     }
 
     private static bool TrySelectTightHostBounds(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds, out Rect bounds)
