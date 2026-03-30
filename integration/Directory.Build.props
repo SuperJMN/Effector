@@ -1,5 +1,5 @@
 <Project>
   <PropertyGroup>
-    <EffectorPackageVersion Condition="'$(EffectorPackageVersion)' == ''">0.2.0</EffectorPackageVersion>
+    <EffectorPackageVersion Condition="'$(EffectorPackageVersion)' == ''">0.3.0</EffectorPackageVersion>
   </PropertyGroup>
 </Project>
