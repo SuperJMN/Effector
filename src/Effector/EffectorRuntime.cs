@@ -1025,6 +1025,21 @@ public static class EffectorRuntime
         return false;
     }
 
+    private static bool TryGetHostVisual(IEffect effect, out Visual visual)
+    {
+        lock (Sync)
+        {
+            if (HostVisuals.TryGetValue(effect, out var holder))
+            {
+                visual = holder.Visual;
+                return true;
+            }
+        }
+
+        visual = null!;
+        return false;
+    }
+
     private static bool TryResolveCurrentHostVisualBounds(IEffect effect, out Rect bounds)
     {
         lock (Sync)
@@ -1488,10 +1503,11 @@ public static class EffectorRuntime
         var deviceClip = ToSKRect(deviceClipBounds);
         var usedHostVisualBounds = TryGetHostVisualBounds(effect, out var hostBounds);
         var usedRenderThreadBounds = TakeRenderThreadEffectBounds(effect, out var renderBounds);
-        var authoritativeEffectRect = SelectAuthoritativeEffectRectCandidate(
+        var authoritativeEffectRect = SelectAuthoritativeEffectRectCandidateWithHostPreference(
             effectClipRect,
             usedHostVisualBounds ? hostBounds : (Rect?)null,
-            usedRenderThreadBounds ? renderBounds : (Rect?)null);
+            usedRenderThreadBounds ? renderBounds : (Rect?)null,
+            ShouldPreferHostBounds(effect));
         var intermediateSurfaceDpi = s_skiaIntermediateSurfaceDpiField?.GetValue(drawingContext) is Vector vector
             ? vector
             : new Vector(96d, 96d);
@@ -2044,11 +2060,26 @@ public static class EffectorRuntime
     private static Rect? SelectAuthoritativeEffectRect(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds) =>
         SelectAuthoritativeEffectRectCandidate(effectClipRect, hostBounds, renderBounds).Rect;
 
-    private static SelectedEffectRect SelectAuthoritativeEffectRectCandidate(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds)
+    private static Rect? SelectAuthoritativeEffectRectForHostPreference(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds, bool preferHostBounds) =>
+        SelectAuthoritativeEffectRectCandidateWithHostPreference(effectClipRect, hostBounds, renderBounds, preferHostBounds).Rect;
+
+    private static SelectedEffectRect SelectAuthoritativeEffectRectCandidate(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds) =>
+        SelectAuthoritativeEffectRectCandidateWithHostPreference(effectClipRect, hostBounds, renderBounds, preferHostBounds: false);
+
+    private static SelectedEffectRect SelectAuthoritativeEffectRectCandidateWithHostPreference(
+        Rect? effectClipRect,
+        Rect? hostBounds,
+        Rect? renderBounds,
+        bool preferHostBounds)
     {
         if (TrySelectTightHostBounds(effectClipRect, hostBounds, renderBounds, out var tightHostBounds))
         {
             return new SelectedEffectRect(tightHostBounds, EffectRectSource.HostLogical);
+        }
+
+        if (preferHostBounds && hostBounds.HasValue && hostBounds.Value.Width > 0d && hostBounds.Value.Height > 0d)
+        {
+            return new SelectedEffectRect(hostBounds, EffectRectSource.HostLogical);
         }
 
         if (effectClipRect.HasValue && effectClipRect.Value.Width > 0d && effectClipRect.Value.Height > 0d)
@@ -2067,6 +2098,17 @@ public static class EffectorRuntime
         }
 
         return default;
+    }
+
+    private static bool ShouldPreferHostBounds(IEffect effect)
+    {
+        if (!TryGetHostVisual(effect, out var visual))
+        {
+            return false;
+        }
+
+        var renderTransform = visual.RenderTransform;
+        return renderTransform is not null && !renderTransform.Value.IsIdentity;
     }
 
     private static bool TrySelectTightHostBounds(Rect? effectClipRect, Rect? hostBounds, Rect? renderBounds, out Rect bounds)
