@@ -221,6 +221,67 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public async Task HostTransformPreference_Is_RenderThreadSafe_After_TransformMutation()
+    {
+        var effect = RunOnUiThread(() =>
+        {
+            var instance = new GridShaderEffect
+            {
+                CellSize = 16d,
+                Strength = 0.4d,
+                Color = Color.Parse("#00D9FF")
+            };
+
+            var scale = new ScaleTransform(1d, 1d);
+            var host = new Border
+            {
+                Width = 120,
+                Height = 80,
+                Effect = instance,
+                RenderTransform = scale,
+                RenderTransformOrigin = RelativePoint.Center
+            };
+
+            var canvas = new Canvas
+            {
+                Width = 320,
+                Height = 220,
+                Children = { host }
+            };
+
+            var window = new Window
+            {
+                Width = 320,
+                Height = 220,
+                Content = canvas
+            };
+
+            Canvas.SetLeft(host, 48d);
+            Canvas.SetTop(host, 36d);
+            window.Show();
+            window.UpdateLayout();
+
+            scale.ScaleX = 1.4d;
+            scale.ScaleY = 1.25d;
+            return instance;
+        });
+
+        var result = await Task.Run(() =>
+        {
+            var shouldPreferHostBounds = typeof(EffectorRuntime).GetMethod(
+                "ShouldPreferHostBounds",
+                BindingFlags.Static | BindingFlags.NonPublic)!;
+            var args = new object?[] { effect, null };
+            var shouldPrefer = (bool)shouldPreferHostBounds.Invoke(null, args)!;
+            return (shouldPrefer, size: Assert.IsType<Size>(args[1]));
+        });
+
+        Assert.True(result.shouldPrefer);
+        Assert.Equal(120d, result.size.Width, 3);
+        Assert.Equal(80d, result.size.Height, 3);
+    }
+
+    [Fact]
     public void GetEffectOutputPadding_UsesCustomFactory_ForGlowEffect()
     {
         RunOnUiThread(() =>

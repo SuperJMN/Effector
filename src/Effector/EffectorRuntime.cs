@@ -34,6 +34,7 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, EffectorShaderDebugInfo> ShaderDebugInfoByType = new();
     private static readonly ConditionalWeakTable<object, HostVisualHolder> HostVisuals = new();
     private static readonly ConditionalWeakTable<IEffect, EffectBoundsHolder> HostVisualBounds = new();
+    private static readonly ConditionalWeakTable<IEffect, HostPreferenceHolder> HostVisualPreferences = new();
     private static readonly ConditionalWeakTable<IEffect, EffectBoundsHolder> RenderThreadEffectBounds = new();
     private static readonly ConditionalWeakTable<IEffect, ProxyHolder> RenderThreadProxies = new();
     private static readonly ConditionalWeakTable<IEffect, ProxyHolder> RenderThreadVisuals = new();
@@ -80,6 +81,19 @@ public static class EffectorRuntime
         }
 
         public Visual Visual { get; }
+    }
+
+    private sealed class HostPreferenceHolder
+    {
+        public HostPreferenceHolder(bool preferHostBounds, Size? unclippedHostSize)
+        {
+            PreferHostBounds = preferHostBounds;
+            UnclippedHostSize = unclippedHostSize;
+        }
+
+        public bool PreferHostBounds { get; }
+
+        public Size? UnclippedHostSize { get; }
     }
 
     private sealed class MirroredEffectHolder
@@ -780,6 +794,9 @@ public static class EffectorRuntime
         }
 
         PropagateMirroredHostVisual(avaloniaEffect, visual);
+        var (preferHostBounds, unclippedHostSize) = ResolveHostVisualPreference(avaloniaEffect, visual);
+        StoreHostVisualPreference(avaloniaEffect, preferHostBounds, unclippedHostSize);
+        PropagateMirroredHostVisualPreference(avaloniaEffect, preferHostBounds, unclippedHostSize);
 
         if (TryResolveHostVisualBounds(avaloniaEffect, visual, out var bounds))
         {
@@ -802,6 +819,7 @@ public static class EffectorRuntime
             if (effect is IEffect avaloniaEffect)
             {
                 HostVisualBounds.Remove(avaloniaEffect);
+                HostVisualPreferences.Remove(avaloniaEffect);
                 ClearMirroredHostVisual(avaloniaEffect);
             }
         }
@@ -823,6 +841,11 @@ public static class EffectorRuntime
             if (HostVisualBounds.TryGetValue(source, out var boundsHolder))
             {
                 StoreHostVisualBounds(mirror, boundsHolder.Bounds);
+            }
+
+            if (HostVisualPreferences.TryGetValue(source, out var preferenceHolder))
+            {
+                StoreHostVisualPreference(mirror, preferenceHolder.PreferHostBounds, preferenceHolder.UnclippedHostSize);
             }
         }
     }
@@ -854,6 +877,19 @@ public static class EffectorRuntime
         }
     }
 
+    private static void PropagateMirroredHostVisualPreference(IEffect source, bool preferHostBounds, Size? unclippedHostSize)
+    {
+        lock (Sync)
+        {
+            if (!MirroredEffects.TryGetValue(source, out var mirror))
+            {
+                return;
+            }
+
+            StoreHostVisualPreference(mirror.Effect, preferHostBounds, unclippedHostSize);
+        }
+    }
+
     private static void ClearMirroredHostVisual(IEffect source)
     {
         lock (Sync)
@@ -865,6 +901,7 @@ public static class EffectorRuntime
 
             HostVisuals.Remove(mirror.Effect);
             HostVisualBounds.Remove(mirror.Effect);
+            HostVisualPreferences.Remove(mirror.Effect);
         }
     }
 
@@ -1010,6 +1047,15 @@ public static class EffectorRuntime
         }
     }
 
+    private static void StoreHostVisualPreference(IEffect effect, bool preferHostBounds, Size? unclippedHostSize)
+    {
+        lock (Sync)
+        {
+            HostVisualPreferences.Remove(effect);
+            HostVisualPreferences.Add(effect, new HostPreferenceHolder(preferHostBounds, unclippedHostSize));
+        }
+    }
+
     private static bool TryGetHostVisualBounds(IEffect effect, out Rect bounds)
     {
         lock (Sync)
@@ -1025,18 +1071,20 @@ public static class EffectorRuntime
         return false;
     }
 
-    private static bool TryGetHostVisual(IEffect effect, out Visual visual)
+    private static bool TryGetHostVisualPreference(IEffect effect, out bool preferHostBounds, out Size? unclippedHostSize)
     {
         lock (Sync)
         {
-            if (HostVisuals.TryGetValue(effect, out var holder))
+            if (HostVisualPreferences.TryGetValue(effect, out var holder))
             {
-                visual = holder.Visual;
+                preferHostBounds = holder.PreferHostBounds;
+                unclippedHostSize = holder.UnclippedHostSize;
                 return true;
             }
         }
 
-        visual = null!;
+        preferHostBounds = false;
+        unclippedHostSize = null;
         return false;
     }
 
@@ -1126,6 +1174,27 @@ public static class EffectorRuntime
             HostVisualBounds.Remove(effect);
             HostVisualBounds.Add(effect, new EffectBoundsHolder(bounds));
         }
+    }
+
+    private static (bool PreferHostBounds, Size? UnclippedHostSize) ResolveHostVisualPreference(IEffect effect, Visual visual)
+    {
+        var renderTransform = visual.RenderTransform;
+        var preferHostBounds = renderTransform is not null && !renderTransform.Value.IsIdentity;
+
+        var width = visual.Bounds.Width;
+        var height = visual.Bounds.Height;
+        if (width <= 0d || height <= 0d)
+        {
+            return (preferHostBounds, null);
+        }
+
+        if (TryGetPadding(effect, out var padding))
+        {
+            width += padding.Left + padding.Right;
+            height += padding.Top + padding.Bottom;
+        }
+
+        return (preferHostBounds, new Size(width, height));
     }
 
     public static object CreateFactory(
@@ -2116,32 +2185,7 @@ public static class EffectorRuntime
 
     private static bool ShouldPreferHostBounds(IEffect effect, out Size? unclippedHostSize)
     {
-        unclippedHostSize = null;
-        if (!TryGetHostVisual(effect, out var visual))
-        {
-            return false;
-        }
-
-        var renderTransform = visual.RenderTransform;
-        if (renderTransform is null || renderTransform.Value.IsIdentity)
-        {
-            return false;
-        }
-
-        var width = visual.Bounds.Width;
-        var height = visual.Bounds.Height;
-        if (width > 0d && height > 0d)
-        {
-            if (TryGetPadding(effect, out var padding))
-            {
-                width += padding.Left + padding.Right;
-                height += padding.Top + padding.Bottom;
-            }
-
-            unclippedHostSize = new Size(width, height);
-        }
-
-        return true;
+        return TryGetHostVisualPreference(effect, out var preferHostBounds, out unclippedHostSize) && preferHostBounds;
     }
 
     private static bool TryClipPreferredHostBounds(Rect? effectClipRect, Rect preferredHostBounds, Size? unclippedHostSize, out Rect clippedBounds)
