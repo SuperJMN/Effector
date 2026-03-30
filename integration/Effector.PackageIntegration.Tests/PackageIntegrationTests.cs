@@ -1,7 +1,10 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
@@ -44,6 +47,26 @@ public sealed class PackageIntegrationTests
         {
             Assert.IsAssignableFrom<IEffect>(new PackageTintEffect());
         });
+    }
+
+    [Fact]
+    public void NuGetConsumedApp_RestoreGraph_Aligns_LinuxNativeAssets_With_SkiaSharp()
+    {
+        var restoredPackageVersions = ReadRestoredPackageVersions(
+            Path.Combine(
+                GetPackageIntegrationTestsProjectDirectory(),
+                "..",
+                "Effector.PackageIntegration.App",
+                "obj",
+                "project.assets.json"));
+
+        Assert.True(
+            restoredPackageVersions.TryGetValue("SkiaSharp", out var skiaSharpVersion),
+            "Expected the integration app restore graph to include SkiaSharp.");
+        Assert.True(
+            restoredPackageVersions.TryGetValue("SkiaSharp.NativeAssets.Linux", out var linuxNativeAssetsVersion),
+            "Expected the integration app restore graph to include SkiaSharp.NativeAssets.Linux.");
+        Assert.Equal(skiaSharpVersion, linuxNativeAssetsVersion);
     }
 
     [Fact]
@@ -153,5 +176,33 @@ public sealed class PackageIntegrationTests
 
         Directory.CreateDirectory(root);
         return Path.Combine(root, fileName);
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadRestoredPackageVersions(string assetsFilePath)
+    {
+        Assert.True(File.Exists(assetsFilePath), $"Expected restore assets file at '{assetsFilePath}'.");
+
+        using var document = JsonDocument.Parse(File.ReadAllText(assetsFilePath));
+        Assert.True(
+            document.RootElement.TryGetProperty("libraries", out var libraries),
+            $"Expected restore assets file '{assetsFilePath}' to contain a 'libraries' section.");
+
+        var packageVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var library in libraries.EnumerateObject())
+        {
+            var separatorIndex = library.Name.LastIndexOf('/');
+            Assert.True(separatorIndex > 0, $"Unexpected NuGet library key '{library.Name}'.");
+
+            packageVersions[library.Name[..separatorIndex]] = library.Name[(separatorIndex + 1)..];
+        }
+
+        return packageVersions;
+    }
+
+    private static string GetPackageIntegrationTestsProjectDirectory([CallerFilePath] string sourceFilePath = "")
+    {
+        var projectDirectory = Path.GetDirectoryName(sourceFilePath);
+        Assert.False(string.IsNullOrWhiteSpace(projectDirectory));
+        return projectDirectory!;
     }
 }
