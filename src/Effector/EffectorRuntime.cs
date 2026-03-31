@@ -13,6 +13,7 @@ using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using SkiaSharp;
 
@@ -31,6 +32,7 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, EffectorEffectDescriptor> Descriptors = new();
     private static readonly Dictionary<string, EffectorEffectDescriptor> DescriptorsByName = new(StringComparer.Ordinal);
     private static readonly Dictionary<object, Stack<EffectorShaderEffectFrame>> ShaderFrames = new();
+    private static readonly Dictionary<object, Stack<EffectorShaderEffectFrame>> CapturedFilterFrames = new();
     private static readonly Dictionary<Type, EffectorShaderDebugInfo> ShaderDebugInfoByType = new();
     private static readonly ConditionalWeakTable<object, HostVisualHolder> HostVisuals = new();
     private static readonly ConditionalWeakTable<IEffect, EffectBoundsHolder> HostVisualBounds = new();
@@ -461,7 +463,9 @@ public static class EffectorRuntime
         EnsureInitialized();
         EnsureEffectAnimatorMetadata(animator);
 
-        var subject = s_effectAnimatorDisposeSubjectCtor.Invoke(new object?[] { animator, animation, control, clock, onComplete });
+        var disposeSubjectCtor = s_effectAnimatorDisposeSubjectCtor
+            ?? throw new MissingMemberException("Avalonia.Animation.DisposeAnimationInstanceSubject`1");
+        var subject = disposeSubjectCtor.Invoke(new object?[] { animator, animation, control, clock, onComplete });
         disposable = new EffectorCompositeDisposable(
             match.Subscribe((IObserver<bool>)subject),
             (IDisposable)subject);
@@ -478,21 +482,70 @@ public static class EffectorRuntime
             return;
         }
 
-        if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor?.CreateShaderEffect is null)
+        if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor is null)
+        {
+            return;
+        }
+
+        StoreRenderThreadEffectBounds(effect, bounds);
+
+        if (descriptor.CreateShaderEffect is null)
         {
             return;
         }
 
         StoreRenderThreadProxy(effect, proxy);
         StoreRenderThreadVisual(effect, visual);
-        StoreRenderThreadEffectBounds(effect, bounds);
+    }
+
+    public static SKImageFilter? CreateEffectPatched(object drawingContext, Rect? effectClipRect, IEffect effect)
+    {
+        if (drawingContext is null)
+        {
+            throw new ArgumentNullException(nameof(drawingContext));
+        }
+
+        _ = effect ?? throw new ArgumentNullException(nameof(effect));
+
+        EnsureInitialized();
+        EnsureSkiaMetadata(drawingContext);
+
+        if (s_skiaCurrentOpacityField is null)
+        {
+            throw new InvalidOperationException("Avalonia.Skia current opacity field has not been discovered.");
+        }
+
+        if (s_skiaUseOpacitySaveLayerField is null)
+        {
+            throw new InvalidOperationException("Avalonia.Skia opacity save-layer field has not been discovered.");
+        }
+
+        var currentOpacity = Convert.ToDouble(s_skiaCurrentOpacityField.GetValue(drawingContext));
+        var useOpacitySaveLayer = Convert.ToBoolean(s_skiaUseOpacitySaveLayerField.GetValue(drawingContext)!);
+        return CreateEffectPatched(effect, currentOpacity, useOpacitySaveLayer, effectClipRect);
     }
 
     public static SKImageFilter? CreateEffectPatched(IEffect effect, double currentOpacity, bool useOpacitySaveLayer)
     {
         _ = effect ?? throw new ArgumentNullException(nameof(effect));
 
-        var context = new SkiaEffectContext(currentOpacity, useOpacitySaveLayer);
+        var hasRenderThreadBounds = TakeRenderThreadEffectBounds(effect, out var renderThreadBounds);
+        return CreateEffectPatched(
+            effect,
+            currentOpacity,
+            useOpacitySaveLayer,
+            hasRenderThreadBounds ? renderThreadBounds : null);
+    }
+
+    public static SKImageFilter? CreateEffectPatched(IEffect effect, double currentOpacity, bool useOpacitySaveLayer, Rect? renderThreadBounds)
+    {
+        _ = effect ?? throw new ArgumentNullException(nameof(effect));
+
+        var context = CreateEffectContext(
+            effect,
+            currentOpacity,
+            useOpacitySaveLayer,
+            renderThreadBounds);
         if (TryCreateFilter(effect, context, out var customFilter))
         {
             return customFilter;
@@ -537,6 +590,14 @@ public static class EffectorRuntime
         return TryBeginShaderEffect(drawingContext, effectClipRect, effect);
     }
 
+    public static bool TryBeginCapturedFilterEffectPatched(object drawingContext, Rect? effectClipRect, IEffect effect)
+    {
+        EnsureInitialized();
+        EnsureSkiaMetadata(drawingContext);
+        TraceShaderPhase(effect, "begin:captured-filter:patched");
+        return TryBeginCapturedFilterEffect(drawingContext, effectClipRect, effect);
+    }
+
     public static bool TryEndShaderEffectPatched(object drawingContext)
     {
         EnsureInitialized();
@@ -545,49 +606,59 @@ public static class EffectorRuntime
         return TryEndShaderEffect(drawingContext);
     }
 
-    public static bool TryGetActiveShaderCanvas(object drawingContext, out SKCanvas canvas)
+    public static bool TryEndCapturedFilterEffectPatched(object drawingContext)
     {
-        lock (Sync)
+        EnsureInitialized();
+        EnsureSkiaMetadata(drawingContext);
+        TraceShaderGlobalPhase(drawingContext, "end:captured-filter:patched");
+        return TryEndCapturedFilterEffect(drawingContext);
+    }
+
+    public static bool TryGetActiveCaptureCanvas(object drawingContext, out SKCanvas canvas)
+    {
+        if (TryGetActiveFrame(CapturedFilterFrames, drawingContext, out var capturedFrame) ||
+            TryGetActiveFrame(ShaderFrames, drawingContext, out capturedFrame))
         {
-            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
-            {
-                canvas = stack.Peek().Surface.Canvas;
-                return true;
-            }
+            canvas = capturedFrame.Surface.Canvas;
+            return true;
         }
 
         canvas = null!;
         return false;
     }
 
-    public static bool TryGetActiveShaderSurface(object drawingContext, out SKSurface? surface)
+    public static bool TryGetActiveCaptureSurface(object drawingContext, out SKSurface? surface)
     {
-        lock (Sync)
+        if (TryGetActiveFrame(CapturedFilterFrames, drawingContext, out var capturedFrame) ||
+            TryGetActiveFrame(ShaderFrames, drawingContext, out capturedFrame))
         {
-            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
-            {
-                surface = stack.Peek().Surface;
-                return true;
-            }
+            surface = capturedFrame.Surface;
+            return true;
         }
 
         surface = null;
         return false;
     }
 
-    public static Matrix AdjustTransformForActiveShaderFrame(object drawingContext, Matrix currentTransform)
+    public static bool TryGetActiveShaderCanvas(object drawingContext, out SKCanvas canvas) =>
+        TryGetActiveCaptureCanvas(drawingContext, out canvas);
+
+    public static bool TryGetActiveShaderSurface(object drawingContext, out SKSurface? surface) =>
+        TryGetActiveCaptureSurface(drawingContext, out surface);
+
+    public static Matrix AdjustTransformForActiveCaptureFrame(object drawingContext, Matrix currentTransform)
     {
-        lock (Sync)
+        if (TryGetActiveFrame(CapturedFilterFrames, drawingContext, out var capturedFrame) ||
+            TryGetActiveFrame(ShaderFrames, drawingContext, out capturedFrame))
         {
-            if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
-            {
-                var frame = stack.Peek();
-                return Matrix.CreateTranslation(-frame.EffectBounds.Left, -frame.EffectBounds.Top) * currentTransform;
-            }
+            return Matrix.CreateTranslation(-capturedFrame.EffectBounds.Left, -capturedFrame.EffectBounds.Top) * currentTransform;
         }
 
         return currentTransform;
     }
+
+    public static Matrix AdjustTransformForActiveShaderFrame(object drawingContext, Matrix currentTransform) =>
+        AdjustTransformForActiveCaptureFrame(drawingContext, currentTransform);
 
     public static SKRect ToSKRectPatched(Rect rect) =>
         new((float)rect.X, (float)rect.Y, (float)(rect.X + rect.Width), (float)(rect.Y + rect.Height));
@@ -690,7 +761,7 @@ public static class EffectorRuntime
             return false;
         }
 
-        filter = descriptor.CreateFilter(effect, CreateContext(drawingContext));
+        filter = descriptor.CreateFilter(effect, CreateContext(drawingContext, effect));
         return true;
     }
 
@@ -1088,8 +1159,163 @@ public static class EffectorRuntime
         return false;
     }
 
+    private static bool TryResolveLocalInputBounds(IEffect effect, out Rect bounds)
+    {
+        var padding = GetEffectPadding(effect);
+
+        if (TryGetHostVisualPreference(effect, out _, out var unclippedHostSize) &&
+            unclippedHostSize is { } size &&
+            size.Width > 0d &&
+            size.Height > 0d)
+        {
+            var deflatedSize = Deflate(size, padding);
+            if (deflatedSize.Width > 0d && deflatedSize.Height > 0d)
+            {
+                bounds = new Rect(default, deflatedSize);
+                return true;
+            }
+        }
+
+        if (TryResolveCurrentHostVisualBounds(effect, out var currentHostBounds) &&
+            currentHostBounds.Width > 0d &&
+            currentHostBounds.Height > 0d)
+        {
+            var contentBounds = Deflate(currentHostBounds, padding);
+            if (contentBounds.Width > 0d && contentBounds.Height > 0d)
+            {
+                bounds = new Rect(default, contentBounds.Size);
+                return true;
+            }
+        }
+
+        if (TryGetHostVisualBounds(effect, out var hostBounds) &&
+            hostBounds.Width > 0d &&
+            hostBounds.Height > 0d)
+        {
+            var contentBounds = Deflate(hostBounds, padding);
+            if (contentBounds.Width > 0d && contentBounds.Height > 0d)
+            {
+                bounds = new Rect(default, contentBounds.Size);
+                return true;
+            }
+        }
+
+        bounds = default;
+        return false;
+    }
+
+    private static bool TryResolveSceneInputBounds(IEffect effect, out Rect bounds)
+    {
+        var padding = GetEffectPadding(effect);
+
+        if (TryGetHostVisualPreference(effect, out _, out var unclippedHostSize) &&
+            unclippedHostSize is { } size &&
+            size.Width > 0d &&
+            size.Height > 0d)
+        {
+            if (TryResolveCurrentHostVisualBounds(effect, out var preferredCurrentHostBounds) &&
+                preferredCurrentHostBounds.Width > 0d &&
+                preferredCurrentHostBounds.Height > 0d)
+            {
+                var contentBounds = Deflate(new Rect(preferredCurrentHostBounds.Position, size), padding);
+                if (contentBounds.Width > 0d && contentBounds.Height > 0d)
+                {
+                    bounds = contentBounds;
+                    return true;
+                }
+            }
+
+            if (TryGetHostVisualBounds(effect, out var preferredHostBounds) &&
+                preferredHostBounds.Width > 0d &&
+                preferredHostBounds.Height > 0d)
+            {
+                var contentBounds = Deflate(new Rect(preferredHostBounds.Position, size), padding);
+                if (contentBounds.Width > 0d && contentBounds.Height > 0d)
+                {
+                    bounds = contentBounds;
+                    return true;
+                }
+            }
+
+            var deflatedSize = Deflate(size, padding);
+            if (deflatedSize.Width > 0d && deflatedSize.Height > 0d)
+            {
+                bounds = new Rect(default, deflatedSize);
+                return true;
+            }
+        }
+
+        if (TryResolveCurrentHostVisualBounds(effect, out var currentHostBounds) &&
+            currentHostBounds.Width > 0d &&
+            currentHostBounds.Height > 0d)
+        {
+            var contentBounds = Deflate(currentHostBounds, padding);
+            if (contentBounds.Width > 0d && contentBounds.Height > 0d)
+            {
+                bounds = contentBounds;
+                return true;
+            }
+        }
+
+        if (TryGetHostVisualBounds(effect, out var hostBounds) &&
+            hostBounds.Width > 0d &&
+            hostBounds.Height > 0d)
+        {
+            var contentBounds = Deflate(hostBounds, padding);
+            if (contentBounds.Width > 0d && contentBounds.Height > 0d)
+            {
+                bounds = contentBounds;
+                return true;
+            }
+        }
+
+        bounds = default;
+        return false;
+    }
+
+    private static Thickness GetEffectPadding(IEffect effect) =>
+        TryGetPadding(effect, out var padding) ? padding : default;
+
+    private static Size Deflate(Size size, Thickness padding)
+    {
+        var width = Math.Max(0d, size.Width - padding.Left - padding.Right);
+        var height = Math.Max(0d, size.Height - padding.Top - padding.Bottom);
+        return new Size(width, height);
+    }
+
+    private static Rect Deflate(Rect rect, Thickness padding)
+    {
+        var x = rect.X + padding.Left;
+        var y = rect.Y + padding.Top;
+        var width = Math.Max(0d, rect.Width - padding.Left - padding.Right);
+        var height = Math.Max(0d, rect.Height - padding.Top - padding.Bottom);
+        return new Rect(x, y, width, height);
+    }
+
+    private static SKRect Deflate(SKRect rect, Thickness padding)
+    {
+        var x = rect.Left + (float)padding.Left;
+        var y = rect.Top + (float)padding.Top;
+        var width = Math.Max(0f, rect.Width - (float)padding.Left - (float)padding.Right);
+        var height = Math.Max(0f, rect.Height - (float)padding.Top - (float)padding.Bottom);
+        return SKRect.Create(x, y, width, height);
+    }
+
+    private static Thickness ScaleThickness(Thickness padding, float scaleX, float scaleY) =>
+        new(
+            padding.Left * scaleX,
+            padding.Top * scaleY,
+            padding.Right * scaleX,
+            padding.Bottom * scaleY);
+
     private static bool TryResolveCurrentHostVisualBounds(IEffect effect, out Rect bounds)
     {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            bounds = default;
+            return false;
+        }
+
         lock (Sync)
         {
             if (HostVisuals.TryGetValue(effect, out var holder))
@@ -1407,7 +1633,7 @@ public static class EffectorRuntime
         }
     }
 
-    private static SkiaEffectContext CreateContext(object drawingContext)
+    private static SkiaEffectContext CreateContext(object drawingContext, IEffect? effect = null)
     {
         EnsureSkiaMetadata(drawingContext);
 
@@ -1425,7 +1651,64 @@ public static class EffectorRuntime
 
         var currentOpacity = Convert.ToDouble(s_skiaCurrentOpacityField.GetValue(drawingContext)!);
         var useOpacitySaveLayer = Convert.ToBoolean(s_skiaUseOpacitySaveLayerField.GetValue(drawingContext)!);
+        return CreateEffectContext(effect, currentOpacity, useOpacitySaveLayer, renderThreadBounds: null);
+    }
+
+    private static SkiaEffectContext CreateEffectContext(
+        IEffect? effect,
+        double currentOpacity,
+        bool useOpacitySaveLayer,
+        Rect? renderThreadBounds)
+    {
+        if (effect is not null)
+        {
+            if (renderThreadBounds is { } renderBounds &&
+                TryCreateContextFromRenderThreadBounds(
+                    effect,
+                    currentOpacity,
+                    useOpacitySaveLayer,
+                    renderBounds,
+                    out var renderThreadContext))
+            {
+                return renderThreadContext;
+            }
+
+            var hasInputBounds = TryResolveLocalInputBounds(effect, out var inputBounds);
+            var hasSceneBounds = TryResolveSceneInputBounds(effect, out var sceneBounds);
+            if (hasInputBounds || hasSceneBounds)
+            {
+                return new SkiaEffectContext(
+                    currentOpacity,
+                    useOpacitySaveLayer,
+                    hasInputBounds ? inputBounds : default,
+                    hasSceneBounds ? sceneBounds : default);
+            }
+        }
+
         return new SkiaEffectContext(currentOpacity, useOpacitySaveLayer);
+    }
+
+    private static bool TryCreateContextFromRenderThreadBounds(
+        IEffect effect,
+        double currentOpacity,
+        bool useOpacitySaveLayer,
+        Rect renderBounds,
+        out SkiaEffectContext context)
+    {
+        var padding = GetEffectPadding(effect);
+        var contentBounds = Deflate(renderBounds, padding);
+        if (contentBounds.Width <= 0d || contentBounds.Height <= 0d)
+        {
+            context = default;
+            return false;
+        }
+
+        context = new SkiaEffectContext(
+            effectiveOpacity: currentOpacity,
+            usesOpacitySaveLayer: useOpacitySaveLayer,
+            inputBounds: new Rect(default, contentBounds.Size),
+            sceneBounds: contentBounds);
+        return true;
     }
 
     private static void EnsureSkiaMetadata(object drawingContext)
@@ -1497,11 +1780,14 @@ public static class EffectorRuntime
         EnsureInitialized();
     }
 
-    private static bool TryGetActiveShaderFrame(object instance, out EffectorShaderEffectFrame frame)
+    private static bool TryGetActiveFrame(
+        Dictionary<object, Stack<EffectorShaderEffectFrame>> frames,
+        object instance,
+        out EffectorShaderEffectFrame frame)
     {
         lock (Sync)
         {
-            if (ShaderFrames.TryGetValue(instance, out var stack) && stack.Count > 0)
+            if (frames.TryGetValue(instance, out var stack) && stack.Count > 0)
             {
                 frame = stack.Peek();
                 return true;
@@ -1511,6 +1797,9 @@ public static class EffectorRuntime
         frame = default!;
         return false;
     }
+
+    private static bool TryGetActiveShaderFrame(object instance, out EffectorShaderEffectFrame frame)
+        => TryGetActiveFrame(ShaderFrames, instance, out frame);
 
     private static SKMatrix ToSKMatrix(Matrix matrix) =>
         new()
@@ -1541,13 +1830,19 @@ public static class EffectorRuntime
         captureCanvas.SetMatrix(ToSKMatrix(translatedTransform));
     }
 
-    private static bool TryBeginShaderEffect(object drawingContext, Rect? effectClipRect, IEffect effect)
+    private static bool RequiresSourceCapture(IEffect effect)
     {
-        if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor?.CreateShaderEffect is null)
+        if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor is null)
         {
-            TraceShaderPhase(effect, "begin:not-shader");
             return false;
         }
+
+        return descriptor.RequiresSourceCapture;
+    }
+
+    private static bool TryCreateCaptureFrame(object drawingContext, Rect? effectClipRect, IEffect effect, out EffectorShaderEffectFrame frame)
+    {
+        frame = default!;
 
         if (s_skiaBaseCanvasField is null)
         {
@@ -1598,19 +1893,16 @@ public static class EffectorRuntime
         var rawEffectRect = authoritativeEffectRect.Rect.HasValue ? ToSKRect(authoritativeEffectRect.Rect.Value) : (SKRect?)null;
         if (deviceEffectBounds.IsEmpty)
         {
-            TraceShaderPhase(effect, "begin:device-bounds-empty");
             return false;
         }
 
         var intermediateSurfaceBounds = ResolveIntermediateSurfaceBounds(deviceEffectBounds);
         if (intermediateSurfaceBounds.Width <= 0 || intermediateSurfaceBounds.Height <= 0)
         {
-            TraceShaderPhase(effect, "begin:surface-bounds-empty");
             return false;
         }
 
         var localEffectBounds = SKRect.Create(intermediateSurfaceBounds.Width, intermediateSurfaceBounds.Height);
-        TraceShaderPhase(effect, "begin:create-capture-context");
         SKSurface surface;
         IDisposable layerOwner;
         IDisposable? layerDrawingContext;
@@ -1620,20 +1912,18 @@ public static class EffectorRuntime
                 drawingContext,
                 new PixelSize(intermediateSurfaceBounds.Width, intermediateSurfaceBounds.Height));
         }
-        catch (Exception ex)
+        catch
         {
-            TraceShaderError(effect, "begin:create-capture-context", ex);
             return false;
         }
-        TraceShaderPhase(effect, "begin:capture-context-created");
-        var frame = new EffectorShaderEffectFrame(
+        frame = new EffectorShaderEffectFrame(
             effect,
             previousCanvas,
             previousSurface,
             surface,
             layerOwner,
             layerDrawingContext,
-            CreateContext(drawingContext),
+            CreateContext(drawingContext, effect),
             deviceClipBounds,
             logicalEffectBounds,
             deviceEffectBounds,
@@ -1645,31 +1935,101 @@ public static class EffectorRuntime
             true,
             proxy: null,
             previousProxyImpl: null);
+        return true;
+    }
+
+    private static void PushCaptureFrame(
+        Dictionary<object, Stack<EffectorShaderEffectFrame>> frames,
+        object drawingContext,
+        EffectorShaderEffectFrame frame,
+        string phase)
+    {
+        lock (Sync)
+        {
+            if (!frames.TryGetValue(drawingContext, out var stack))
+            {
+                stack = new Stack<EffectorShaderEffectFrame>();
+                frames[drawingContext] = stack;
+            }
+
+            stack.Push(frame);
+            TraceShaderStackPhase(frame.Effect, drawingContext, phase, stack.Count);
+        }
+    }
+
+    private static bool TryPopCaptureFrame(
+        Dictionary<object, Stack<EffectorShaderEffectFrame>> frames,
+        object drawingContext,
+        out EffectorShaderEffectFrame? frame,
+        out int remainingFrames)
+    {
+        lock (Sync)
+        {
+            if (frames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
+            {
+                frame = stack.Pop();
+                remainingFrames = stack.Count;
+                if (stack.Count == 0)
+                {
+                    frames.Remove(drawingContext);
+                }
+
+                return true;
+            }
+        }
+
+        frame = null;
+        remainingFrames = 0;
+        return false;
+    }
+
+    private static bool TryBeginShaderEffect(object drawingContext, Rect? effectClipRect, IEffect effect)
+    {
+        if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor?.CreateShaderEffect is null)
+        {
+            TraceShaderPhase(effect, "begin:not-shader");
+            return false;
+        }
+
+        if (!TryCreateCaptureFrame(drawingContext, effectClipRect, effect, out var frame))
+        {
+            TraceShaderPhase(effect, "begin:capture-frame-failed");
+            return false;
+        }
+
         StoreShaderDebugInfo(
             descriptor,
             effect,
             new EffectorShaderDebugInfo(
-                logicalEffectBounds,
-                deviceClipBounds,
-                rawEffectRect,
-                totalMatrix,
-                usedRenderThreadBounds,
-                intermediateSurfaceBounds));
+                frame.EffectBounds,
+                frame.DeviceClipBounds,
+                frame.RawEffectRect,
+                frame.TotalMatrix,
+                frame.UsedRenderThreadBounds,
+                frame.IntermediateSurfaceBounds));
 
-        lock (Sync)
-        {
-            if (!ShaderFrames.TryGetValue(drawingContext, out var stack))
-            {
-                stack = new Stack<EffectorShaderEffectFrame>();
-                ShaderFrames[drawingContext] = stack;
-            }
-
-            stack.Push(frame);
-            TraceShaderStackPhase(frame.Effect, drawingContext, "begin:pushed", stack.Count);
-        }
+        PushCaptureFrame(ShaderFrames, drawingContext, frame, "begin:pushed");
 
         ApplyInitialShaderCaptureTransform(frame);
 
+        return true;
+    }
+
+    private static bool TryBeginCapturedFilterEffect(object drawingContext, Rect? effectClipRect, IEffect effect)
+    {
+        if (!RequiresSourceCapture(effect))
+        {
+            return false;
+        }
+
+        if (!TryCreateCaptureFrame(drawingContext, effectClipRect, effect, out var frame))
+        {
+            TraceShaderPhase(effect, "begin:captured-filter:capture-frame-failed");
+            return false;
+        }
+
+        PushCaptureFrame(CapturedFilterFrames, drawingContext, frame, "begin:captured-filter:pushed");
+        ApplyInitialShaderCaptureTransform(frame);
         return true;
     }
 
@@ -1798,6 +2158,169 @@ public static class EffectorRuntime
 
         return true;
     }
+
+    private static bool TryEndCapturedFilterEffect(object drawingContext)
+    {
+        if (!TryPopCaptureFrame(CapturedFilterFrames, drawingContext, out var frame, out var remainingFrames) || frame is null)
+        {
+            TraceShaderGlobalPhase(drawingContext, "end:captured-filter:no-frame");
+            return false;
+        }
+
+        TraceShaderStackPhase(frame.Effect, drawingContext, "end:captured-filter:popped", remainingFrames);
+
+        try
+        {
+            frame.Surface.Canvas.Flush();
+            frame.Surface.Flush();
+
+            using var snapshot = CreateShaderCaptureSnapshot(frame);
+            if (snapshot is null)
+            {
+                TraceShaderPhase(frame.Effect, "end:captured-filter:snapshot-null");
+                return false;
+            }
+
+            var restoreCount = frame.PreviousCanvas.Save();
+            try
+            {
+                frame.PreviousCanvas.ResetMatrix();
+                frame.PreviousCanvas.ClipRect(frame.DeviceEffectBounds);
+                return DrawCapturedFilterResult(frame, snapshot);
+            }
+            finally
+            {
+                frame.PreviousCanvas.RestoreToCount(restoreCount);
+            }
+        }
+        finally
+        {
+            frame.Dispose();
+        }
+    }
+
+    private static bool DrawCapturedFilterResult(EffectorShaderEffectFrame frame, SKImage sourceSnapshot)
+    {
+        using var normalizedSourceSnapshot = CreateRasterImageCopy(
+            sourceSnapshot,
+            Math.Max(frame.IntermediateSurfaceBounds.Width, 1),
+            Math.Max(frame.IntermediateSurfaceBounds.Height, 1));
+        var effectiveSourceSnapshot = normalizedSourceSnapshot ?? sourceSnapshot;
+        var filterContext = CreateCapturedFilterEffectContext(frame, effectiveSourceSnapshot, out var localSourceRect);
+        using var filter = TryCreateFilter(frame.Effect, filterContext, out var createdFilter)
+            ? createdFilter
+            : null;
+
+        var deviceDestinationRect = frame.DeviceEffectBounds;
+        var logicalResultRect = SKRect.Create(0f, 0f, effectiveSourceSnapshot.Width, effectiveSourceSnapshot.Height);
+
+        if (filter is null)
+        {
+            frame.PreviousCanvas.DrawImage(
+                effectiveSourceSnapshot,
+                logicalResultRect,
+                deviceDestinationRect,
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+            return true;
+        }
+
+        using var resultSurface = SKSurface.Create(
+            new SKImageInfo(
+                Math.Max(frame.IntermediateSurfaceBounds.Width, 1),
+                Math.Max(frame.IntermediateSurfaceBounds.Height, 1),
+                SKImageInfo.PlatformColorType,
+                SKAlphaType.Premul));
+        if (resultSurface is null)
+        {
+            return false;
+        }
+
+        resultSurface.Canvas.Clear(SKColors.Transparent);
+        resultSurface.Canvas.ResetMatrix();
+        resultSurface.Canvas.ClipRect(logicalResultRect);
+
+        using var outputFilter = NeedsOffsetWrapper(localSourceRect)
+            ? SKImageFilter.CreateOffset(localSourceRect.Left, localSourceRect.Top, filter, logicalResultRect)
+            : null;
+        using var layerPaint = new SKPaint
+        {
+            ImageFilter = outputFilter ?? filter,
+            BlendMode = SKBlendMode.SrcOver,
+            IsAntialias = true
+        };
+
+        var restoreCount = resultSurface.Canvas.SaveLayer(logicalResultRect, layerPaint);
+        try
+        {
+            resultSurface.Canvas.DrawImage(effectiveSourceSnapshot, -localSourceRect.Left, -localSourceRect.Top);
+        }
+        finally
+        {
+            resultSurface.Canvas.RestoreToCount(restoreCount);
+        }
+
+        resultSurface.Canvas.Flush();
+        resultSurface.Flush();
+
+        using var resultImage = resultSurface.Snapshot();
+        frame.PreviousCanvas.DrawImage(
+            resultImage,
+            logicalResultRect,
+            deviceDestinationRect,
+            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+        return true;
+    }
+
+    private static SKImage? CreateRasterImageCopy(SKImage sourceSnapshot, int width, int height)
+    {
+        using var surface = SKSurface.Create(
+            new SKImageInfo(
+                Math.Max(width, 1),
+                Math.Max(height, 1),
+                SKImageInfo.PlatformColorType,
+                SKAlphaType.Premul));
+        if (surface is null)
+        {
+            return null;
+        }
+
+        surface.Canvas.Clear(SKColors.Transparent);
+        surface.Canvas.DrawImage(
+            sourceSnapshot,
+            SKRect.Create(0f, 0f, sourceSnapshot.Width, sourceSnapshot.Height),
+            SKRect.Create(0f, 0f, Math.Max(width, 1), Math.Max(height, 1)),
+            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+        surface.Canvas.Flush();
+        surface.Flush();
+        return surface.Snapshot();
+    }
+
+    private static SkiaEffectContext CreateCapturedFilterEffectContext(
+        EffectorShaderEffectFrame frame,
+        SKImage sourceSnapshot,
+        out SKRect localSourceRect)
+    {
+        var scaleX = frame.EffectBounds.Width > 0f ? frame.LocalEffectBounds.Width / frame.EffectBounds.Width : 1f;
+        var scaleY = frame.EffectBounds.Height > 0f ? frame.LocalEffectBounds.Height / frame.EffectBounds.Height : 1f;
+        localSourceRect = Deflate(frame.LocalEffectBounds, ScaleThickness(GetEffectPadding(frame.Effect), scaleX, scaleY));
+        if (localSourceRect.Width <= 0f || localSourceRect.Height <= 0f)
+        {
+            localSourceRect = frame.LocalEffectBounds;
+        }
+
+        return new SkiaEffectContext(
+            frame.EffectContext.EffectiveOpacity,
+            frame.EffectContext.UsesOpacitySaveLayer,
+            new Rect(0d, 0d, localSourceRect.Width, localSourceRect.Height),
+            default,
+            sourceSnapshot,
+            new Rect(localSourceRect.Left, localSourceRect.Top, localSourceRect.Width, localSourceRect.Height),
+            scaleX,
+            scaleY);
+    }
+
+    private static bool NeedsOffsetWrapper(SKRect localSourceRect) =>
+        Math.Abs(localSourceRect.Left) > float.Epsilon || Math.Abs(localSourceRect.Top) > float.Epsilon;
 
     private static (SKSurface Surface, IDisposable Owner, IDisposable? DrawingContext) CreateShaderCaptureContext(
         object sourceDrawingContext,

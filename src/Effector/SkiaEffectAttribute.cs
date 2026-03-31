@@ -13,4 +13,8 @@ public sealed class SkiaEffectAttribute : Attribute
     public Type FactoryType { get; }
 
     public string? Name { get; set; }
+
+    // Effects that need SVG-style SourceGraphic semantics can opt into an
+    // explicit capture path instead of relying on Skia's live SaveLayer input.
+    public bool RequiresSourceCapture { get; set; }
 }

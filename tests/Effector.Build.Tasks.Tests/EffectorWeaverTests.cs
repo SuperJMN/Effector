@@ -191,6 +191,55 @@ public sealed class EffectorWeaverTests
     }
 
     [Fact]
+    public void ConsumerEffects_CanCompile_Without_Explicit_IEffect_Implementation()
+    {
+        var assemblyPath = BuildTemporaryAssembly(
+            """
+            using Avalonia;
+            using Effector;
+            using SkiaSharp;
+
+            namespace SampleEffects;
+
+            [SkiaEffect(typeof(SampleEffectFactory))]
+            public sealed class SampleEffect : SkiaEffectBase
+            {
+                public static readonly StyledProperty<double> StrengthProperty =
+                    AvaloniaProperty.Register<SampleEffect, double>(nameof(Strength), 0.5d);
+
+                static SampleEffect()
+                {
+                    AffectsRender<SampleEffect>(StrengthProperty);
+                }
+
+                public double Strength
+                {
+                    get => GetValue(StrengthProperty);
+                    set => SetValue(StrengthProperty, value);
+                }
+            }
+
+            public sealed class SampleEffectFactory : ISkiaEffectFactory<SampleEffect>, ISkiaEffectValueFactory
+            {
+                public Thickness GetPadding(SampleEffect effect) => default;
+
+                public Thickness GetPadding(object[] values) => default;
+
+                public SKImageFilter? CreateFilter(SampleEffect effect, SkiaEffectContext context) =>
+                    SkiaFilterBuilder.Pixelate((float)effect.Strength + 1f);
+
+                public SKImageFilter? CreateFilter(object[] values, SkiaEffectContext context) =>
+                    SkiaFilterBuilder.Pixelate((float)(double)values[0] + 1f);
+            }
+            """);
+
+        var output = RewriteTemporaryAssembly(assemblyPath);
+
+        Assert.Empty(output.Errors);
+        Assert.Equal(1, output.RewrittenEffectCount);
+    }
+
+    [Fact]
     public void AvaloniaBasePatcher_Rewrites_Target_Methods_And_Is_Idempotent()
     {
         var sourcePath = GetAvaloniaBasePath();
@@ -254,9 +303,12 @@ public sealed class EffectorWeaverTests
         using var assembly = AssemblyDefinition.ReadAssembly(tempPath);
         AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "CreateEffect", "CreateEffectPatched", 1);
         AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PushEffect", "TryBeginShaderEffectPatched", 2);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PushEffect", "TryBeginCapturedFilterEffectPatched", 2);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PushEffect", "CreateEffectPatched", 2);
         AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PopEffect", "TryEndShaderEffectPatched", 0);
-        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "get_Canvas", "TryGetActiveShaderCanvas", 0);
-        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "get_Surface", "TryGetActiveShaderSurface", 0);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "PopEffect", "TryEndCapturedFilterEffectPatched", 0);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "get_Canvas", "TryGetActiveCaptureCanvas", 0);
+        AssertMethodCallsRuntime(assembly, "Avalonia.Skia.DrawingContextImpl", "get_Surface", "TryGetActiveCaptureSurface", 0);
         AssertMethodCallsAnyRuntimeMethod(assembly, "Avalonia.Skia.DrawingContextImpl", "set_Transform", 1);
     }
 

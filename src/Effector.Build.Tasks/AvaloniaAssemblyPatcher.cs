@@ -404,7 +404,9 @@ internal sealed class AvaloniaAssemblyPatcher
         il.Emit(OpCodes.Ldfld, currentOpacityField);
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Ldfld, useOpacitySaveLayerField);
-        il.Emit(OpCodes.Call, module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.CreateEffectPatched))!));
+        il.Emit(OpCodes.Call, module.ImportReference(typeof(EffectorRuntime).GetMethod(
+            nameof(EffectorRuntime.CreateEffectPatched),
+            new[] { typeof(IEffect), typeof(double), typeof(bool) })!));
         il.Emit(OpCodes.Ret);
     }
 
@@ -420,7 +422,6 @@ internal sealed class AvaloniaAssemblyPatcher
         method.Body.Variables.Add(filterLocal);
 
         var checkLease = GetMethod(method.DeclaringType, "CheckLease", 0);
-        var createEffect = GetMethod(method.DeclaringType, "CreateEffect", 1);
         var getCanvas = GetMethod(method.DeclaringType, "get_Canvas", 0);
         var saveLayerNoRect = module.ImportReference(typeof(SKCanvas).GetMethods().Single(candidate =>
             candidate.Name == nameof(SKCanvas.SaveLayer) &&
@@ -433,6 +434,10 @@ internal sealed class AvaloniaAssemblyPatcher
             candidate.GetParameters()[1].ParameterType == typeof(SKPaint)));
         var toSkRect = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.ToSKRectPatched))!);
         var beginShader = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryBeginShaderEffectPatched))!);
+        var beginCapturedFilter = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryBeginCapturedFilterEffectPatched))!);
+        var createEffect = module.ImportReference(typeof(EffectorRuntime).GetMethod(
+            nameof(EffectorRuntime.CreateEffectPatched),
+            new[] { typeof(object), typeof(Rect?), typeof(IEffect) })!);
         var nullableRectHasValue = module.ImportReference(typeof(Nullable<Rect>).GetProperty(nameof(Nullable<Rect>.HasValue))!.GetMethod!);
         var nullableRectValue = module.ImportReference(typeof(Nullable<Rect>).GetProperty(nameof(Nullable<Rect>.Value))!.GetMethod!);
         var imageFilterProperty = module.ImportReference(typeof(SKPaint).GetProperty(nameof(SKPaint.ImageFilter))!.SetMethod!);
@@ -442,6 +447,7 @@ internal sealed class AvaloniaAssemblyPatcher
         method.Body.Variables.Add(paintLocal);
 
         var afterShader = Instruction.Create(OpCodes.Nop);
+        var afterCapturedFilter = Instruction.Create(OpCodes.Nop);
         var noClip = Instruction.Create(OpCodes.Nop);
         var afterUsing = Instruction.Create(OpCodes.Nop);
         var skipFilterDispose = Instruction.Create(OpCodes.Nop);
@@ -459,6 +465,15 @@ internal sealed class AvaloniaAssemblyPatcher
 
         il.Append(afterShader);
         il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Ldarg_2);
+        il.Emit(OpCodes.Call, beginCapturedFilter);
+        il.Emit(OpCodes.Brfalse_S, afterCapturedFilter);
+        il.Emit(OpCodes.Ret);
+
+        il.Append(afterCapturedFilter);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_1);
         il.Emit(OpCodes.Ldarg_2);
         il.Emit(OpCodes.Call, createEffect);
         il.Emit(OpCodes.Stloc, filterLocal);
@@ -513,13 +528,21 @@ internal sealed class AvaloniaAssemblyPatcher
         var checkLease = GetMethod(method.DeclaringType, "CheckLease", 0);
         var restoreCanvas = GetMethod(method.DeclaringType, "RestoreCanvas", 0);
         var endShader = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryEndShaderEffectPatched))!);
+        var endCapturedFilter = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryEndCapturedFilterEffectPatched))!);
 
         var il = method.Body.GetILProcessor();
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Call, checkLease);
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Call, endShader);
+        var tryCapturedFilter = il.Create(OpCodes.Nop);
         var restoreBuiltIn = il.Create(OpCodes.Nop);
+        il.Emit(OpCodes.Brfalse_S, tryCapturedFilter);
+        il.Emit(OpCodes.Ret);
+
+        il.Append(tryCapturedFilter);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, endCapturedFilter);
         il.Emit(OpCodes.Brfalse_S, restoreBuiltIn);
         il.Emit(OpCodes.Ret);
 
@@ -543,7 +566,7 @@ internal sealed class AvaloniaAssemblyPatcher
         var fallback = il.Create(OpCodes.Nop);
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Ldloca_S, canvasLocal);
-        il.Emit(OpCodes.Call, module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryGetActiveShaderCanvas))!));
+        il.Emit(OpCodes.Call, module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryGetActiveCaptureCanvas))!));
         il.Emit(OpCodes.Brfalse_S, fallback);
         il.Emit(OpCodes.Ldloc, canvasLocal);
         il.Emit(OpCodes.Ret);
@@ -567,7 +590,7 @@ internal sealed class AvaloniaAssemblyPatcher
         var fallback = il.Create(OpCodes.Nop);
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Ldloca_S, surfaceLocal);
-        il.Emit(OpCodes.Call, module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryGetActiveShaderSurface))!));
+        il.Emit(OpCodes.Call, module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.TryGetActiveCaptureSurface))!));
         il.Emit(OpCodes.Brfalse_S, fallback);
         il.Emit(OpCodes.Ldloc, surfaceLocal);
         il.Emit(OpCodes.Ret);
@@ -597,7 +620,7 @@ internal sealed class AvaloniaAssemblyPatcher
         var nullableMatrixHasValue = module.ImportReference(typeof(Nullable<Matrix>).GetProperty(nameof(Nullable<Matrix>.HasValue))!.GetMethod!);
         var nullableMatrixValue = module.ImportReference(typeof(Nullable<Matrix>).GetProperty(nameof(Nullable<Matrix>.Value))!.GetMethod!);
         var setMatrix = module.ImportReference(typeof(SKCanvas).GetMethod(nameof(SKCanvas.SetMatrix), new[] { typeof(SKMatrix) })!);
-        var adjustShaderTransform = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.AdjustTransformForActiveShaderFrame))!);
+        var adjustShaderTransform = module.ImportReference(typeof(EffectorRuntime).GetMethod(nameof(EffectorRuntime.AdjustTransformForActiveCaptureFrame))!);
         var effectiveTransformLocal = new VariableDefinition(module.ImportReference(typeof(Matrix)));
         method.Body.Variables.Add(effectiveTransformLocal);
 

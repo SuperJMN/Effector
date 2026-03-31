@@ -342,7 +342,13 @@ internal sealed class EffectorWeaver
             return true;
         }
 
-        return propertyType.FullName == typeof(string).FullName;
+        if (propertyType.FullName == typeof(string).FullName)
+        {
+            return true;
+        }
+
+        var resolved = propertyType.Resolve();
+        return resolved is not null && ImplementsInterface(resolved, typeof(IEffectorImmutableValue).FullName);
     }
 
     private static bool ImplementsFactory(TypeDefinition factoryType, TypeDefinition effectType)

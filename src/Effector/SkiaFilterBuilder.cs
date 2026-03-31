@@ -6,6 +6,9 @@ namespace Effector;
 
 public static class SkiaFilterBuilder
 {
+    public static SKImageFilter Identity() =>
+        SKImageFilter.CreateColorFilter(SKColorFilter.CreateColorMatrix(ColorMatrixBuilder.CreateIdentity()));
+
     public static SKImageFilter Matrix(SKMatrix matrix, SKImageFilter? input = null) =>
         Matrix(matrix, SKSamplingOptions.Default, input);
 

@@ -35,6 +35,7 @@ internal sealed class EffectorEffectDescriptor
             EffectorEffectValueSupport.ToEffectName(mutableType, effectAttribute?.Name));
         AlternateParseName = EffectorEffectValueSupport.NormalizeIdentifier(
             EffectorEffectValueSupport.ToKebabCase(mutableType.Name));
+        RequiresSourceCapture = effectAttribute?.RequiresSourceCapture ?? false;
 
         Properties = BuildPropertyDescriptors(mutableType, immutableType);
     }
@@ -48,6 +49,8 @@ internal sealed class EffectorEffectDescriptor
     public string ParseName { get; }
 
     public string AlternateParseName { get; }
+
+    public bool RequiresSourceCapture { get; }
 
     public Func<IEffect, IImmutableEffect> Freeze { get; }
 
