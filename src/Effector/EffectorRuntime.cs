@@ -582,7 +582,11 @@ public static class EffectorRuntime
             if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
             {
                 var frame = stack.Peek();
-                return Matrix.CreateTranslation(-frame.EffectBounds.Left, -frame.EffectBounds.Top) * currentTransform;
+                var adjustedTransform = currentTransform * Matrix.CreateTranslation(
+                    -frame.IntermediateSurfaceBounds.Left,
+                    -frame.IntermediateSurfaceBounds.Top);
+                TraceShaderTransform(frame.Effect, "adjust-transform", currentTransform, adjustedTransform, frame.EffectBounds);
+                return adjustedTransform;
             }
         }
 
@@ -1536,8 +1540,11 @@ public static class EffectorRuntime
     {
         var captureCanvas = frame.Surface.Canvas;
         var translatedTransform =
-            Matrix.CreateTranslation(-frame.EffectBounds.Left, -frame.EffectBounds.Top) *
-            ToAvaloniaMatrix(frame.TotalMatrix);
+            ToAvaloniaMatrix(frame.TotalMatrix) *
+            Matrix.CreateTranslation(
+                -frame.IntermediateSurfaceBounds.Left,
+                -frame.IntermediateSurfaceBounds.Top);
+        TraceShaderTransform(frame.Effect, "initial-transform", ToAvaloniaMatrix(frame.TotalMatrix), translatedTransform, frame.EffectBounds);
         captureCanvas.SetMatrix(ToSKMatrix(translatedTransform));
     }
 
@@ -1752,11 +1759,17 @@ public static class EffectorRuntime
                         frame.UsedRenderThreadBounds,
                         frame.IntermediateSurfaceBounds));
             }
+            var overlayContentBounds = contentBounds.IsEmpty ? frame.LocalEffectBounds : contentBounds;
+            var normalizedOverlayBounds = NormalizeRectToOrigin(overlayContentBounds);
+            var overlayDestinationBounds = OffsetRect(
+                normalizedOverlayBounds,
+                frame.IntermediateSurfaceBounds.Left + overlayContentBounds.Left,
+                frame.IntermediateSurfaceBounds.Top + overlayContentBounds.Top);
             var shaderContext = new SkiaShaderEffectContext(
                 frame.EffectContext,
                 snapshot,
                 SKRect.Create(snapshot.Width, snapshot.Height),
-                contentBounds.IsEmpty ? frame.LocalEffectBounds : contentBounds);
+                normalizedOverlayBounds);
 
             using var shaderEffect = TryCreateShaderEffect(frame.Effect, shaderContext, out var created)
                 ? created
@@ -1779,9 +1792,10 @@ public static class EffectorRuntime
                         frame.PreviousCanvas,
                         snapshot,
                         shaderEffect,
-                        contentBounds.IsEmpty ? frame.LocalEffectBounds : contentBounds,
-                        frame.LocalEffectBounds,
-                        frame.DeviceEffectBounds);
+                        normalizedOverlayBounds,
+                        normalizedOverlayBounds,
+                        overlayDestinationBounds,
+                        new SKPoint(-overlayContentBounds.Left, -overlayContentBounds.Top));
                     TraceShaderPhase(frame.Effect, "end:overlay-done");
                 }
             }
@@ -2417,7 +2431,8 @@ public static class EffectorRuntime
         SkiaShaderEffect shaderEffect,
         SKRect contentBounds,
         SKRect effectBounds,
-        SKRect destinationOriginBounds)
+        SKRect destinationOriginBounds,
+        SKPoint snapshotLocalOffset)
     {
         var destinationRect = Intersect(shaderEffect.DestinationRect ?? contentBounds, effectBounds);
         destinationRect = Intersect(destinationRect, contentBounds);
@@ -2459,7 +2474,7 @@ public static class EffectorRuntime
                 }
 
                 using var maskPaint = new SKPaint { BlendMode = SKBlendMode.DstIn };
-                canvas.DrawImage(snapshot, 0, 0, maskPaint);
+                canvas.DrawImage(snapshot, snapshotLocalOffset.X, snapshotLocalOffset.Y, maskPaint);
             }
             finally
             {
@@ -2471,6 +2486,9 @@ public static class EffectorRuntime
             canvas.RestoreToCount(restoreCount);
         }
     }
+
+    private static SKRect NormalizeRectToOrigin(SKRect rect) =>
+        new(0f, 0f, Math.Max(0f, rect.Width), Math.Max(0f, rect.Height));
 
     private static void TraceShaderFrame(
         IEffect effect,
@@ -2710,6 +2728,24 @@ public static class EffectorRuntime
         File.AppendAllText(ShaderTracePath!, line);
     }
 
+    private static void TraceShaderTransform(IEffect effect, string phase, Matrix input, Matrix output, SKRect effectBounds)
+    {
+        if (string.IsNullOrWhiteSpace(ShaderTracePath))
+        {
+            return;
+        }
+
+        var line =
+            DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+            " | transform | " + effect.GetType().FullName +
+            " | phase=" + phase +
+            " | effect=" + Format(effectBounds) +
+            " | input=" + Format(input) +
+            " | output=" + Format(output) +
+            Environment.NewLine;
+        File.AppendAllText(ShaderTracePath!, line);
+    }
+
     private static string Format(SKRect rect) =>
         rect.Left.ToString("0.##", CultureInfo.InvariantCulture) + "," +
         rect.Top.ToString("0.##", CultureInfo.InvariantCulture) + "," +
@@ -2721,6 +2757,17 @@ public static class EffectorRuntime
         rect.Y.ToString("0.##", CultureInfo.InvariantCulture) + "," +
         rect.Width.ToString("0.##", CultureInfo.InvariantCulture) + "," +
         rect.Height.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static string Format(Matrix matrix) =>
+        matrix.M11.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M12.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M13.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M21.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M22.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M23.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M31.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M32.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+        matrix.M33.ToString("0.###", CultureInfo.InvariantCulture);
 
     private static string Format(SKRect? rect) =>
         rect.HasValue ? Format(rect.Value) : "null";

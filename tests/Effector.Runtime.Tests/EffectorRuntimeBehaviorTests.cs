@@ -57,6 +57,11 @@ public sealed class EffectorRuntimeBehaviorTests
         }
     }
 
+    private sealed class FakeRuntimeShaderDrawingContext
+    {
+        public object GrContext = new();
+    }
+
     private static void RunOnUiThread(Action action)
     {
         Session.Dispatch(action, CancellationToken.None).GetAwaiter().GetResult();
@@ -500,6 +505,124 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void ShaderCaptureTransform_Uses_DeviceSurfaceOrigin_When_DpiScaled()
+    {
+        using var previousSurface = SKSurface.Create(new SKImageInfo(1024, 1024));
+        using var captureSurface = SKSurface.Create(new SKImageInfo(589, 589));
+        Assert.NotNull(previousSurface);
+        Assert.NotNull(captureSurface);
+
+        var frame = new EffectorShaderEffectFrame(
+            new Issue10OverlayShaderEffect(),
+            previousSurface!.Canvas,
+            previousSurface,
+            captureSurface!,
+            new TestDisposable(),
+            layerDrawingContext: null,
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            new SKRectI(0, 0, 1000, 1000),
+            new SKRect(149.765f, 92.765f, 443.765f, 386.765f),
+            new SKRect(299f, 185f, 888f, 774f),
+            new SKRect(0f, 0f, 589f, 589f),
+            new SKRectI(299, 185, 888, 774),
+            rawEffectRect: new SKRect(149.765f, 92.765f, 443.765f, 386.765f),
+            new SKMatrix
+            {
+                ScaleX = 1f,
+                SkewX = 0f,
+                TransX = 0f,
+                SkewY = 0f,
+                ScaleY = 1f,
+                TransY = 0f,
+                Persp0 = 0f,
+                Persp1 = 0f,
+                Persp2 = 1f
+            },
+            usedRenderThreadBounds: false,
+            usesLocalDrawingCoordinates: true,
+            proxy: null,
+            previousProxyImpl: null);
+
+        var applyTransform = typeof(EffectorRuntime).GetMethod(
+            "ApplyInitialShaderCaptureTransform",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        applyTransform.Invoke(null, new object[] { frame });
+
+        var matrix = captureSurface.Canvas.TotalMatrix;
+        Assert.Equal(-299f, matrix.TransX);
+        Assert.Equal(-185f, matrix.TransY);
+        Assert.Equal(1f, matrix.ScaleX);
+        Assert.Equal(1f, matrix.ScaleY);
+    }
+
+    [Fact]
+    public void ActiveShaderFrameTransformOffset_Uses_DeviceSurfaceOrigin_When_DpiScaled()
+    {
+        using var previousSurface = SKSurface.Create(new SKImageInfo(1024, 1024));
+        using var captureSurface = SKSurface.Create(new SKImageInfo(589, 589));
+        Assert.NotNull(previousSurface);
+        Assert.NotNull(captureSurface);
+
+        var frame = new EffectorShaderEffectFrame(
+            new Issue10OverlayShaderEffect(),
+            previousSurface!.Canvas,
+            previousSurface,
+            captureSurface!,
+            new TestDisposable(),
+            layerDrawingContext: null,
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            new SKRectI(0, 0, 1000, 1000),
+            new SKRect(149.765f, 92.765f, 443.765f, 386.765f),
+            new SKRect(299f, 185f, 888f, 774f),
+            new SKRect(0f, 0f, 589f, 589f),
+            new SKRectI(299, 185, 888, 774),
+            rawEffectRect: new SKRect(149.765f, 92.765f, 443.765f, 386.765f),
+            new SKMatrix
+            {
+                ScaleX = 1f,
+                SkewX = 0f,
+                TransX = 0f,
+                SkewY = 0f,
+                ScaleY = 1f,
+                TransY = 0f,
+                Persp0 = 0f,
+                Persp1 = 0f,
+                Persp2 = 1f
+            },
+            usedRenderThreadBounds: false,
+            usesLocalDrawingCoordinates: true,
+            proxy: null,
+            previousProxyImpl: null);
+
+        var shaderFramesField = typeof(EffectorRuntime).GetField(
+            "ShaderFrames",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        var shaderFrames = (Dictionary<object, Stack<EffectorShaderEffectFrame>>)shaderFramesField.GetValue(null)!;
+        var drawingContext = new object();
+        shaderFrames[drawingContext] = new Stack<EffectorShaderEffectFrame>(new[] { frame });
+
+        try
+        {
+            var adjusted = EffectorRuntime.AdjustTransformForActiveShaderFrame(
+                drawingContext,
+                new Matrix(
+                    2.94d, 0d, 0d,
+                    0d, 2.94d, 0d,
+                    299.53d, 185.53d, 1d));
+
+            Assert.Equal(0.53d, adjusted.M31, 2);
+            Assert.Equal(0.53d, adjusted.M32, 2);
+            Assert.Equal(2.94d, adjusted.M11, 2);
+            Assert.Equal(2.94d, adjusted.M22, 2);
+        }
+        finally
+        {
+            shaderFrames.Remove(drawingContext);
+            frame.Dispose();
+        }
+    }
+
+    [Fact]
     public void ShaderBoundsSelection_Prefers_CurrentCompositorEffectRect_Over_RenderThreadFallback()
     {
         var selectMethod = typeof(EffectorRuntime).GetMethod(
@@ -795,6 +918,49 @@ public sealed class EffectorRuntimeBehaviorTests
         AssertColorClose(runtime.GetPixel(18, 18), fallback.GetPixel(18, 18), tolerance: 4);
         AssertColorClose(runtime.GetPixel(12, 18), fallback.GetPixel(12, 18), tolerance: 8);
         AssertColorClose(runtime.GetPixel(18, 12), fallback.GetPixel(18, 12), tolerance: 8);
+    }
+
+    [Fact]
+    public void DrawMaskedShaderOverlay_RuntimeShader_Compensates_For_TranslatedCanvasOrigin()
+    {
+        if (!EffectorRuntime.DirectRuntimeShadersEnabled)
+        {
+            return;
+        }
+
+        const string shaderSource =
+            """
+            half4 main(float2 coord) {
+                if (coord.x < 4.0 && coord.y < 4.0) {
+                    return half4(1.0, 0.0, 0.0, 1.0);
+                }
+
+                return half4(0.0, 1.0, 0.0, 1.0);
+            }
+            """;
+
+        using var snapshot = CreateOpaqueMaskSnapshot(16, 16);
+        var context = new SkiaShaderEffectContext(
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            snapshot,
+            new SKRect(0, 0, 16, 16),
+            new SKRect(0, 0, 8, 8));
+
+        using var shaderEffect = SkiaRuntimeShaderBuilder.Create(shaderSource, context);
+
+        Assert.NotNull(shaderEffect.Shader);
+
+        using var output = RenderTranslatedRuntimeShaderOverlay(
+            snapshot,
+            shaderEffect,
+            new SKRect(0, 0, 8, 8),
+            new SKRect(0, 0, 8, 8),
+            new SKRect(44, 15, 52, 23),
+            new SKPoint(-4, -3));
+
+        Assert.Equal(0, output.GetPixel(43, 15).Alpha);
+        AssertColorClose(output.GetPixel(44, 15), new SKColor(255, 0, 0, 255), tolerance: 4);
+        AssertColorClose(output.GetPixel(51, 22), new SKColor(0, 255, 0, 255), tolerance: 4);
     }
 
     [Fact]
@@ -1364,6 +1530,272 @@ public sealed class EffectorRuntimeBehaviorTests
             Assert.True(darkBandPixel.Green < baseBandPixel.Green);
             Assert.True(clearPixel.Red > 180);
             Assert.True(clearPixel.Green > 70);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GridShaderEffect_Preserves_TransformedHost_Bounds()
+    {
+        await Session.Dispatch(() =>
+        {
+            var scale = new ScaleTransform(1.5d, 1.5d);
+            var host = new Border
+            {
+                Width = 200,
+                Height = 200,
+                Background = new SolidColorBrush(Color.Parse("#1599AD")),
+                RenderTransform = scale,
+                RenderTransformOrigin = RelativePoint.Center
+            };
+
+            var window = new Window
+            {
+                Width = 480,
+                Height = 420,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            Canvas.SetLeft(host, 100d);
+            Canvas.SetTop(host, 80d);
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            host.Effect = new GridShaderEffect
+            {
+                CellSize = 16d,
+                Strength = 0.4d,
+                Color = Color.Parse("#22FF66")
+            };
+            EffectorRuntime.ClearShaderDebugInfo();
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            var baselineBounds = FindNonWhiteBounds(baseline!);
+            var effectedBounds = FindNonWhiteBounds(effected!);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(GridShaderEffect), out var debugInfo));
+
+            var expectedTopLeft = host.TranslatePoint(new Point(0d, 0d), window);
+            var expectedBottomRight = host.TranslatePoint(new Point(host.Bounds.Width, host.Bounds.Height), window);
+            Assert.True(expectedTopLeft.HasValue);
+            Assert.True(expectedBottomRight.HasValue);
+
+            var expectedBounds = new SKRect(
+                (float)expectedTopLeft!.Value.X,
+                (float)expectedTopLeft.Value.Y,
+                (float)expectedBottomRight!.Value.X,
+                (float)expectedBottomRight.Value.Y);
+
+            var message =
+                $"baseline={FormatRect(baselineBounds)}; " +
+                $"effected={FormatRect(effectedBounds)}; " +
+                $"expected={FormatRect(expectedBounds)}; " +
+                $"capture={FormatRect(debugInfo.RawEffectRect ?? debugInfo.EffectBounds)}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"matrix={debugInfo.TotalMatrix.ScaleX},{debugInfo.TotalMatrix.SkewX},{debugInfo.TotalMatrix.TransX},{debugInfo.TotalMatrix.SkewY},{debugInfo.TotalMatrix.ScaleY},{debugInfo.TotalMatrix.TransY}";
+
+            Assert.True(Math.Abs(baselineBounds.Left - expectedBounds.Left) <= 3f, message);
+            Assert.True(Math.Abs(baselineBounds.Top - expectedBounds.Top) <= 3f, message);
+            Assert.True(Math.Abs(baselineBounds.Right - expectedBounds.Right) <= 3f, message);
+            Assert.True(Math.Abs(baselineBounds.Bottom - expectedBounds.Bottom) <= 3f, message);
+
+            Assert.True(Math.Abs(effectedBounds.Left - baselineBounds.Left) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Top - baselineBounds.Top) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Right - baselineBounds.Right) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Bottom - baselineBounds.Bottom) <= 3f, message);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GridShaderEffect_Preserves_FilledChildBounds_In_TransparentPanelHost()
+    {
+        await Session.Dispatch(() =>
+        {
+            var scale = new ScaleTransform(1d, 1d);
+            var host = new Panel
+            {
+                Width = 200,
+                Height = 200,
+                RenderTransform = scale,
+                RenderTransformOrigin = RelativePoint.Center,
+                Children =
+                {
+                    new Border
+                    {
+                        Background = new SolidColorBrush(Color.Parse("#1599AD")),
+                        Child = new TextBlock
+                        {
+                            Text = "CONTENT",
+                            FontSize = 32,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = new SolidColorBrush(Color.Parse("#D6F0BE")),
+                            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+                        }
+                    }
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 480,
+                Height = 420,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            Canvas.SetLeft(host, 100d);
+            Canvas.SetTop(host, 80d);
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            host.Effect = new GridShaderEffect
+            {
+                CellSize = 16d,
+                Strength = 0.4d,
+                Color = Color.Parse("#22FF66")
+            };
+            EffectorRuntime.ClearShaderDebugInfo();
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            var baselineBounds = FindNonWhiteBounds(baseline!);
+            var effectedBounds = FindNonWhiteBounds(effected!);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(GridShaderEffect), out var debugInfo));
+
+            var expectedTopLeft = host.TranslatePoint(new Point(0d, 0d), window);
+            var expectedBottomRight = host.TranslatePoint(new Point(host.Bounds.Width, host.Bounds.Height), window);
+            Assert.True(expectedTopLeft.HasValue);
+            Assert.True(expectedBottomRight.HasValue);
+
+            var expectedBounds = new SKRect(
+                (float)expectedTopLeft!.Value.X,
+                (float)expectedTopLeft.Value.Y,
+                (float)expectedBottomRight!.Value.X,
+                (float)expectedBottomRight.Value.Y);
+
+            var message =
+                $"baseline={FormatRect(baselineBounds)}; " +
+                $"effected={FormatRect(effectedBounds)}; " +
+                $"expected={FormatRect(expectedBounds)}; " +
+                $"capture={FormatRect(debugInfo.RawEffectRect ?? debugInfo.EffectBounds)}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"matrix={debugInfo.TotalMatrix.ScaleX},{debugInfo.TotalMatrix.SkewX},{debugInfo.TotalMatrix.TransX},{debugInfo.TotalMatrix.SkewY},{debugInfo.TotalMatrix.ScaleY},{debugInfo.TotalMatrix.TransY}";
+
+            Assert.True(Math.Abs(baselineBounds.Left - expectedBounds.Left) <= 3f, message);
+            Assert.True(Math.Abs(baselineBounds.Top - expectedBounds.Top) <= 3f, message);
+            Assert.True(Math.Abs(baselineBounds.Right - expectedBounds.Right) <= 3f, message);
+            Assert.True(Math.Abs(baselineBounds.Bottom - expectedBounds.Bottom) <= 3f, message);
+
+            Assert.True(Math.Abs(effectedBounds.Left - baselineBounds.Left) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Top - baselineBounds.Top) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Right - baselineBounds.Right) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Bottom - baselineBounds.Bottom) <= 3f, message);
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task OverlayShaderEffect_Preserves_FilledChildBounds_In_TransparentPanelHost()
+    {
+        await Session.Dispatch(() =>
+        {
+            var scale = new ScaleTransform(1.47d, 1.47d);
+            var host = new Panel
+            {
+                Width = 200,
+                Height = 200,
+                RenderTransform = scale,
+                RenderTransformOrigin = RelativePoint.Center,
+                Children =
+                {
+                    new Border
+                    {
+                        Background = new SolidColorBrush(Color.Parse("#1599AD")),
+                        Child = new TextBlock
+                        {
+                            Text = "CONTENT",
+                            FontSize = 32,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = new SolidColorBrush(Color.Parse("#D6F0BE")),
+                            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+                        }
+                    }
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 520,
+                Height = 460,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            Canvas.SetLeft(host, 100d);
+            Canvas.SetTop(host, 80d);
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            host.Effect = new Issue10OverlayShaderEffect
+            {
+                Progress = 0.5d
+            };
+            EffectorRuntime.ClearShaderDebugInfo();
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            var baselineBounds = FindNonWhiteBounds(baseline!);
+            var effectedBounds = FindNonWhiteBounds(effected!);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(Issue10OverlayShaderEffect), out var debugInfo));
+
+            var message =
+                $"baseline={FormatRect(baselineBounds)}; " +
+                $"effected={FormatRect(effectedBounds)}; " +
+                $"capture={FormatRect(debugInfo.RawEffectRect ?? debugInfo.EffectBounds)}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"matrix={debugInfo.TotalMatrix.ScaleX},{debugInfo.TotalMatrix.SkewX},{debugInfo.TotalMatrix.TransX},{debugInfo.TotalMatrix.SkewY},{debugInfo.TotalMatrix.ScaleY},{debugInfo.TotalMatrix.TransY}";
+
+            Assert.True(Math.Abs(effectedBounds.Left - baselineBounds.Left) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Top - baselineBounds.Top) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Right - baselineBounds.Right) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Bottom - baselineBounds.Bottom) <= 3f, message);
         }, CancellationToken.None);
     }
 
@@ -2235,6 +2667,49 @@ public sealed class EffectorRuntimeBehaviorTests
         return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
     }
 
+    private static SKRect FindNonWhiteBounds(Avalonia.Media.Imaging.Bitmap bitmap)
+    {
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        stream.Position = 0;
+        using var skBitmap = SKBitmap.Decode(stream);
+        Assert.NotNull(skBitmap);
+
+        var left = skBitmap!.Width;
+        var top = skBitmap.Height;
+        var right = -1;
+        var bottom = -1;
+
+        for (var y = 0; y < skBitmap.Height; y++)
+        {
+            for (var x = 0; x < skBitmap.Width; x++)
+            {
+                var pixel = skBitmap.GetPixel(x, y);
+                if (pixel.Alpha == 0)
+                {
+                    continue;
+                }
+
+                if (pixel.Red > 245 && pixel.Green > 245 && pixel.Blue > 245)
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x);
+                bottom = Math.Max(bottom, y);
+            }
+        }
+
+        return right >= left && bottom >= top
+            ? new SKRect(left, top, right + 1, bottom + 1)
+            : SKRect.Empty;
+    }
+
+    private static string FormatRect(SKRect rect) =>
+        $"{rect.Left},{rect.Top},{rect.Right},{rect.Bottom}";
+
     private static SKColor GetPixel(Avalonia.Media.Imaging.Bitmap bitmap, int x, int y)
     {
         using var stream = new MemoryStream();
@@ -2329,6 +2804,73 @@ public sealed class EffectorRuntimeBehaviorTests
         using var image = surface.Snapshot();
         image.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0);
         return bitmap;
+    }
+
+    private static SKBitmap RenderTranslatedRuntimeShaderOverlay(
+        SKImage snapshot,
+        SkiaShaderEffect shaderEffect,
+        SKRect contentBounds,
+        SKRect effectBounds,
+        SKRect destinationOriginBounds,
+        SKPoint snapshotLocalOffset)
+    {
+        var bitmap = new SKBitmap(96, 64);
+
+        using var surface = SKSurface.Create(new SKImageInfo(bitmap.Width, bitmap.Height));
+        Assert.NotNull(surface);
+
+        var drawMethod = typeof(EffectorRuntime).GetMethod(
+            "DrawMaskedShaderOverlay",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(drawMethod);
+
+        var grContextFieldHolder = typeof(EffectorRuntime).GetField(
+            "s_skiaGrContextField",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(grContextFieldHolder);
+
+        var fakeGrContextField = typeof(FakeRuntimeShaderDrawingContext).GetField(nameof(FakeRuntimeShaderDrawingContext.GrContext));
+        Assert.NotNull(fakeGrContextField);
+
+        var originalGrContextField = (FieldInfo?)grContextFieldHolder!.GetValue(null);
+        try
+        {
+            grContextFieldHolder.SetValue(null, fakeGrContextField);
+
+            var canvas = surface!.Canvas;
+            canvas.Clear(SKColors.Transparent);
+
+            drawMethod!.Invoke(null, new object[]
+            {
+                new FakeRuntimeShaderDrawingContext(),
+                canvas,
+                snapshot,
+                shaderEffect,
+                contentBounds,
+                effectBounds,
+                destinationOriginBounds,
+                snapshotLocalOffset
+            });
+
+            canvas.Flush();
+            using var image = surface.Snapshot();
+            image.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0);
+            return bitmap;
+        }
+        finally
+        {
+            grContextFieldHolder.SetValue(null, originalGrContextField);
+        }
+    }
+
+    private static SKImage CreateOpaqueMaskSnapshot(int width, int height)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(width, height));
+        Assert.NotNull(surface);
+
+        surface!.Canvas.Clear(SKColors.White);
+        surface!.Canvas.Flush();
+        return surface.Snapshot();
     }
 
     private static void AssertColorClose(SKColor actual, SKColor expected, int tolerance)

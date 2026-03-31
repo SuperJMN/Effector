@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../../src/Effector.Build/buildTransitive/Effector.Build.props"
+          Condition="Exists('../../../../src/Effector.Build/buildTransitive/Effector.Build.props')" />
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/Effector/Effector.csproj" />
+  </ItemGroup>
+
+  <Import Project="../../../../src/Effector.Build/buildTransitive/Effector.Build.targets"
+          Condition="Exists('../../../../src/Effector.Build/buildTransitive/Effector.Build.targets')" />
+</Project>
