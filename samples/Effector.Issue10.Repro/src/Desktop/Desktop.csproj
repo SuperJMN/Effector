@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../../src/Effector.Build/buildTransitive/Effector.Build.props"
+          Condition="Exists('../../../../src/Effector.Build/buildTransitive/Effector.Build.props')" />
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\App\App.csproj" />
+  </ItemGroup>
+
+  <Import Project="../../../../src/Effector.Build/buildTransitive/Effector.Build.targets"
+          Condition="Exists('../../../../src/Effector.Build/buildTransitive/Effector.Build.targets')" />
+</Project>
