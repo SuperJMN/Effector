@@ -175,7 +175,7 @@ internal static class FilterEffectBuilder
             case GaussianBlurPrimitive blur:
                 {
                     var input = ResolveInput(blur.Input, context, results, lastResult, isFirst, blur.ColorInterpolation);
-                    if (!input.HasValue || (blur.StdDeviationX < 0d && blur.StdDeviationY < 0d))
+                    if (!input.HasValue || blur.StdDeviationX < 0d || blur.StdDeviationY < 0d)
                     {
                         return null;
                     }
@@ -913,10 +913,12 @@ internal static class FilterEffectBuilder
             return null;
         }
 
-        var tileSize = primitive.StitchTiles == FilterStitchType.Stitch
-            ? new SKPointI()
-            : SKPointI.Empty;
+        if (!cropRect.HasValue)
+        {
+            return null;
+        }
 
+        var tileSize = GetTurbulenceTileSize(primitive, cropRect.Value);
         var shader = primitive.Type == FilterTurbulenceType.Turbulence
             ? SKShader.CreatePerlinNoiseTurbulence(
                 ScaleFrequencyX(primitive.BaseFrequencyX, context),
@@ -931,13 +933,20 @@ internal static class FilterEffectBuilder
                 (float)primitive.Seed,
                 tileSize);
 
-        if (!cropRect.HasValue)
-        {
-            return null;
-        }
-
         var filter = CreateShader(shader, dither: false, cropRect);
         return filter is null ? null : AttachDependencies(filter, shader);
+    }
+
+    private static SKPointI GetTurbulenceTileSize(TurbulencePrimitive primitive, SKRect cropRect)
+    {
+        if (primitive.StitchTiles != FilterStitchType.Stitch)
+        {
+            return SKPointI.Empty;
+        }
+
+        return new SKPointI(
+            Math.Max(1, (int)Math.Ceiling(cropRect.Width)),
+            Math.Max(1, (int)Math.Ceiling(cropRect.Height)));
     }
 
     private static SKImageFilter? CreateTile(

@@ -487,6 +487,11 @@ public static class EffectorRuntime
             return;
         }
 
+        if (descriptor.CreateShaderEffect is null && !descriptor.RequiresSourceCapture)
+        {
+            return;
+        }
+
         StoreRenderThreadEffectBounds(effect, bounds);
 
         if (descriptor.CreateShaderEffect is null)

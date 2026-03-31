@@ -339,6 +339,30 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void RecordRenderThreadEffect_DoesNot_Queue_Bounds_For_Plain_Custom_Filters()
+    {
+        RunOnUiThread(() =>
+        {
+            var effect = new TintEffect
+            {
+                Color = Color.Parse("#0A84FF"),
+                Strength = 0.5d
+            };
+
+            EffectorRuntime.RecordRenderThreadEffect(effect, new object(), new Rect(20d, 30d, 140d, 80d), new Border());
+
+            var takeBoundsMethod = typeof(EffectorRuntime).GetMethod(
+                "TakeRenderThreadEffectBounds",
+                BindingFlags.Static | BindingFlags.NonPublic)!;
+            var args = new object?[] { effect, null };
+
+            var hasBounds = (bool)takeBoundsMethod.Invoke(null, args)!;
+
+            Assert.False(hasBounds);
+        });
+    }
+
+    [Fact]
     public void GetEffectOutputPadding_UsesCustomFactory_ForGlowEffect()
     {
         RunOnUiThread(() =>
