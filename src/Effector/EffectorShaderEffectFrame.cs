@@ -84,6 +84,8 @@ internal sealed class EffectorShaderEffectFrame : IDisposable
 
     public object? PreviousProxyImpl { get; }
 
+    public long ActivationSequence { get; internal set; }
+
     public void DisposeLayerDrawingContext()
     {
         if (_layerDrawingContextDisposed)

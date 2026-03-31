@@ -45,6 +45,7 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, Queue<object>> RenderThreadProxiesByType = new();
     private static readonly Dictionary<Type, Queue<object>> RenderThreadVisualsByType = new();
     [ThreadStatic] private static bool s_suppressShaderEffectsForVisualSnapshot;
+    private static long s_captureFrameSequence;
     private static bool s_initialized;
     private static bool s_skiaPatched;
     private static Type? s_skiaDrawingContextType;
@@ -621,8 +622,7 @@ public static class EffectorRuntime
 
     public static bool TryGetActiveCaptureCanvas(object drawingContext, out SKCanvas canvas)
     {
-        if (TryGetActiveFrame(CapturedFilterFrames, drawingContext, out var capturedFrame) ||
-            TryGetActiveFrame(ShaderFrames, drawingContext, out capturedFrame))
+        if (TryGetTopMostActiveFrame(drawingContext, out var capturedFrame))
         {
             canvas = capturedFrame.Surface.Canvas;
             return true;
@@ -634,8 +634,7 @@ public static class EffectorRuntime
 
     public static bool TryGetActiveCaptureSurface(object drawingContext, out SKSurface? surface)
     {
-        if (TryGetActiveFrame(CapturedFilterFrames, drawingContext, out var capturedFrame) ||
-            TryGetActiveFrame(ShaderFrames, drawingContext, out capturedFrame))
+        if (TryGetTopMostActiveFrame(drawingContext, out var capturedFrame))
         {
             surface = capturedFrame.Surface;
             return true;
@@ -653,8 +652,7 @@ public static class EffectorRuntime
 
     public static Matrix AdjustTransformForActiveCaptureFrame(object drawingContext, Matrix currentTransform)
     {
-        if (TryGetActiveFrame(CapturedFilterFrames, drawingContext, out var capturedFrame) ||
-            TryGetActiveFrame(ShaderFrames, drawingContext, out capturedFrame))
+        if (TryGetTopMostActiveFrame(drawingContext, out var capturedFrame))
         {
             return Matrix.CreateTranslation(-capturedFrame.EffectBounds.Left, -capturedFrame.EffectBounds.Top) * currentTransform;
         }
@@ -1792,14 +1790,61 @@ public static class EffectorRuntime
     {
         lock (Sync)
         {
-            if (frames.TryGetValue(instance, out var stack) && stack.Count > 0)
+            if (TryPeekActiveFrame(frames, instance, out var activeFrame))
             {
-                frame = stack.Peek();
+                frame = activeFrame!;
                 return true;
             }
         }
 
         frame = default!;
+        return false;
+    }
+
+    private static bool TryGetTopMostActiveFrame(object instance, out EffectorShaderEffectFrame frame)
+    {
+        lock (Sync)
+        {
+            var hasCapturedFrame = TryPeekActiveFrame(CapturedFilterFrames, instance, out var capturedFrame);
+            var hasShaderFrame = TryPeekActiveFrame(ShaderFrames, instance, out var shaderFrame);
+
+            if (hasCapturedFrame && hasShaderFrame)
+            {
+                frame = capturedFrame!.ActivationSequence >= shaderFrame!.ActivationSequence
+                    ? capturedFrame
+                    : shaderFrame;
+                return true;
+            }
+
+            if (hasCapturedFrame)
+            {
+                frame = capturedFrame!;
+                return true;
+            }
+
+            if (hasShaderFrame)
+            {
+                frame = shaderFrame!;
+                return true;
+            }
+        }
+
+        frame = default!;
+        return false;
+    }
+
+    private static bool TryPeekActiveFrame(
+        Dictionary<object, Stack<EffectorShaderEffectFrame>> frames,
+        object instance,
+        [NotNullWhen(true)] out EffectorShaderEffectFrame? frame)
+    {
+        if (frames.TryGetValue(instance, out var stack) && stack.Count > 0)
+        {
+            frame = stack.Peek();
+            return true;
+        }
+
+        frame = null;
         return false;
     }
 
@@ -1957,6 +2002,7 @@ public static class EffectorRuntime
                 frames[drawingContext] = stack;
             }
 
+            frame.ActivationSequence = System.Threading.Interlocked.Increment(ref s_captureFrameSequence);
             stack.Push(frame);
             TraceShaderStackPhase(frame.Effect, drawingContext, phase, stack.Count);
         }

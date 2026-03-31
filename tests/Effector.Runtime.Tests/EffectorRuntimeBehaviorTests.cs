@@ -363,6 +363,63 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void ActiveCaptureLookup_Prefers_MostRecently_Pushed_Frame_Across_Frame_Stacks()
+    {
+        using var previousSurface = SKSurface.Create(new SKImageInfo(256, 128));
+        using var capturedSurface = SKSurface.Create(new SKImageInfo(96, 64));
+        using var shaderSurface = SKSurface.Create(new SKImageInfo(96, 64));
+        Assert.NotNull(previousSurface);
+        Assert.NotNull(capturedSurface);
+        Assert.NotNull(shaderSurface);
+
+        var drawingContext = new object();
+        var runtimeType = typeof(EffectorRuntime);
+        var pushCaptureFrame = runtimeType.GetMethod(
+            "PushCaptureFrame",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        var sync = ReadPrivateStaticField<object>(runtimeType, "Sync");
+        var capturedFrames = ReadPrivateStaticField<Dictionary<object, Stack<EffectorShaderEffectFrame>>>(runtimeType, "CapturedFilterFrames");
+        var shaderFrames = ReadPrivateStaticField<Dictionary<object, Stack<EffectorShaderEffectFrame>>>(runtimeType, "ShaderFrames");
+
+        var capturedFrame = CreateTestCaptureFrame(
+            new FilterEffect(),
+            previousSurface!.Canvas,
+            previousSurface,
+            capturedSurface!,
+            new SKRect(40f, 12f, 88f, 52f));
+        var shaderFrame = CreateTestCaptureFrame(
+            new ScanlineShaderEffect(),
+            previousSurface.Canvas,
+            previousSurface,
+            shaderSurface!,
+            new SKRect(96f, 64f, 160f, 112f));
+
+        try
+        {
+            pushCaptureFrame.Invoke(null, new object[] { capturedFrames, drawingContext, capturedFrame, "test:captured" });
+            pushCaptureFrame.Invoke(null, new object[] { shaderFrames, drawingContext, shaderFrame, "test:shader" });
+
+            Assert.True(EffectorRuntime.TryGetActiveCaptureSurface(drawingContext, out var activeSurface));
+            Assert.Same(shaderSurface, activeSurface);
+
+            var adjusted = EffectorRuntime.AdjustTransformForActiveCaptureFrame(drawingContext, Matrix.Identity);
+            Assert.Equal(-96d, adjusted.M31, 3);
+            Assert.Equal(-64d, adjusted.M32, 3);
+        }
+        finally
+        {
+            lock (sync)
+            {
+                capturedFrames.Remove(drawingContext);
+                shaderFrames.Remove(drawingContext);
+            }
+
+            capturedFrame.Dispose();
+            shaderFrame.Dispose();
+        }
+    }
+
+    [Fact]
     public void GetEffectOutputPadding_UsesCustomFactory_ForGlowEffect()
     {
         RunOnUiThread(() =>
@@ -2437,6 +2494,13 @@ public sealed class EffectorRuntimeBehaviorTests
         return (T)property!.GetValue(instance)!;
     }
 
+    private static T ReadPrivateStaticField<T>(Type type, string fieldName)
+    {
+        var field = type.GetField(fieldName, BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (T)field!.GetValue(null)!;
+    }
+
     private static Rect GetStoredHostBounds(IEffect effect)
     {
         var tryGetBoundsMethod = typeof(EffectorRuntime).GetMethod(
@@ -2466,6 +2530,40 @@ public sealed class EffectorRuntimeBehaviorTests
         var maxX = Math.Max(Math.Max(topLeft.Value.X, topRight.Value.X), Math.Max(bottomLeft.Value.X, bottomRight.Value.X));
         var maxY = Math.Max(Math.Max(topLeft.Value.Y, topRight.Value.Y), Math.Max(bottomLeft.Value.Y, bottomRight.Value.Y));
         return new Rect(minX, minY, Math.Max(0d, maxX - minX), Math.Max(0d, maxY - minY));
+    }
+
+    private static EffectorShaderEffectFrame CreateTestCaptureFrame(
+        IEffect effect,
+        SKCanvas previousCanvas,
+        SKSurface previousSurface,
+        SKSurface surface,
+        SKRect effectBounds)
+    {
+        var intermediateSurfaceBounds = new SKRectI(
+            (int)effectBounds.Left,
+            (int)effectBounds.Top,
+            (int)effectBounds.Right,
+            (int)effectBounds.Bottom);
+
+        return new EffectorShaderEffectFrame(
+            effect,
+            previousCanvas,
+            previousSurface,
+            surface,
+            new TestDisposable(),
+            layerDrawingContext: null,
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            new SKRectI(0, 0, 256, 128),
+            effectBounds,
+            effectBounds,
+            SKRect.Create(intermediateSurfaceBounds.Width, intermediateSurfaceBounds.Height),
+            intermediateSurfaceBounds,
+            rawEffectRect: effectBounds,
+            SKMatrix.CreateIdentity(),
+            usedRenderThreadBounds: false,
+            usesLocalDrawingCoordinates: true,
+            proxy: null,
+            previousProxyImpl: null);
     }
 
     private static string GetScreenshotPath(string fileName)

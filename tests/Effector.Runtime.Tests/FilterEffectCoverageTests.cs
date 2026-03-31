@@ -311,6 +311,28 @@ public sealed class FilterEffectCoverageTests
         Assert.InRange(visibleBounds.Value.Bottom, translateY + contentHeight - 2, translateY + contentHeight + 2);
     }
 
+    [Fact]
+    public void FeImage_Slice_Stays_Inside_Its_Primitive_Bounds()
+    {
+        var cropRect = new Rect(70d, 20d, 80d, 120d);
+
+        using var filter = CreateFilter(
+            new FilterPrimitiveCollection(
+                new ImagePrimitive(
+                    SharedImageSource,
+                    new FilterAspectRatio(FilterAspectAlignment.XMidYMid, FilterAspectMeetOrSlice.Slice),
+                    cropRect: cropRect)),
+            new Rect(0d, 0d, 220d, 140d));
+        using var effected = ApplyEffectFilterViaSaveLayer(220, 140, filter!, DrawImageBoundsProbeSource);
+
+        var visibleBounds = GetVisiblePixelBounds(effected);
+        Assert.True(visibleBounds.HasValue, "feImage slice produced no visible pixels.");
+        Assert.InRange(visibleBounds.Value.Left, (int)cropRect.X - 2, (int)cropRect.X + 2);
+        Assert.InRange(visibleBounds.Value.Top, (int)cropRect.Y - 2, (int)cropRect.Y + 2);
+        Assert.InRange(visibleBounds.Value.Right, (int)(cropRect.Right) - 2, (int)(cropRect.Right) + 2);
+        Assert.InRange(visibleBounds.Value.Bottom, (int)(cropRect.Bottom) - 2, (int)(cropRect.Bottom) + 2);
+    }
+
     [Theory]
     [MemberData(nameof(GeneratedWindowPrimitiveGraphs))]
     public async Task GeneratedSourcePrimitives_DoNot_Render_At_Window_Origin_When_Host_Is_Translated(

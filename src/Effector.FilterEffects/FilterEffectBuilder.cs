@@ -979,11 +979,12 @@ internal static class FilterEffectBuilder
     {
         var sourceRect = SKRect.Create(0f, 0f, source.Image.Width, source.Image.Height);
         var mappedRect = MapAspectRatio(sourceRect, destinationRect, aspectRatio);
-        return SKImageFilter.CreateImage(
+        var filter = SKImageFilter.CreateImage(
             source.Image,
             sourceRect,
             mappedRect,
             new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+        return ClipImageFilterToDestinationRect(filter, mappedRect, destinationRect, aspectRatio);
     }
 
     private static SKImageFilter? CreatePicture(
@@ -1027,8 +1028,38 @@ internal static class FilterEffectBuilder
             rasterRect,
             mappedRect,
             new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
-        return filter is null ? null : AttachDependencies(filter, image);
+        if (filter is null)
+        {
+            return null;
+        }
+
+        filter = AttachDependencies(filter, image);
+        return ClipImageFilterToDestinationRect(filter, mappedRect, destinationRect, aspectRatio);
     }
+
+    private static SKImageFilter ClipImageFilterToDestinationRect(
+        SKImageFilter filter,
+        SKRect mappedRect,
+        SKRect destinationRect,
+        FilterAspectRatio aspectRatio)
+    {
+        if (!RequiresDestinationClip(mappedRect, destinationRect, aspectRatio))
+        {
+            return filter;
+        }
+
+        var colorFilter = SKColorFilter.CreateColorMatrix(ColorMatrixBuilder.CreateIdentity());
+        var clippedFilter = CreateColorFilter(colorFilter, filter, destinationRect);
+        return AttachDependencies(clippedFilter, filter, colorFilter);
+    }
+
+    private static bool RequiresDestinationClip(SKRect mappedRect, SKRect destinationRect, FilterAspectRatio aspectRatio) =>
+        aspectRatio.Align != FilterAspectAlignment.None &&
+        aspectRatio.MeetOrSlice == FilterAspectMeetOrSlice.Slice &&
+        (mappedRect.Left < destinationRect.Left ||
+         mappedRect.Top < destinationRect.Top ||
+         mappedRect.Right > destinationRect.Right ||
+         mappedRect.Bottom > destinationRect.Bottom);
 
     private static SKPoint3 GetDirection(FilterDistantLight light)
     {
