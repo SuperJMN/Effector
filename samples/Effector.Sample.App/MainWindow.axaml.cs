@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,6 +20,7 @@ using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Effector.FilterEffects;
 using Effector.Sample.Effects;
 
 namespace Effector.Sample.App;
@@ -92,7 +94,7 @@ public partial class MainWindow : Window
 
     private void RemoveFeatureRow(string name)
     {
-        if (this.FindControl<Grid>(name) is not { Parent: Panel parent } grid)
+        if (FindNamedControl<Grid>(name) is not { Parent: Panel parent } grid)
         {
             return;
         }
@@ -171,6 +173,8 @@ public partial class MainWindow : Window
 
     private void OnOpened(object? sender, EventArgs e)
     {
+        InitializeInlineXamlFilterEffectPreview();
+
         if (!IsEnvironmentSwitchEnabled("EFFECTOR_SAMPLE_DISABLE_FEATURE_ANIMATIONS"))
         {
             StartFeatureAnimations();
@@ -229,9 +233,15 @@ public partial class MainWindow : Window
                limit >= 0;
     }
 
+    private static bool TryGetSectionFilter(out string filter)
+    {
+        filter = Environment.GetEnvironmentVariable("EFFECTOR_SAMPLE_SECTION_FILTER")?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(filter);
+    }
+
     private void BuildGallery()
     {
-        var host = _headlessCodeGalleryHost ?? this.FindControl<StackPanel>("CodeGalleryHost");
+        var host = _headlessCodeGalleryHost ?? FindNamedControl<StackPanel>("CodeGalleryHost");
         if (host is null)
         {
             return;
@@ -243,6 +253,13 @@ public partial class MainWindow : Window
             definitions = definitions.Take(limit).ToArray();
         }
 
+        if (TryGetSectionFilter(out var sectionFilter))
+        {
+            definitions = definitions
+                .Where(definition => definition.Name.Contains(sectionFilter, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+
         foreach (var definition in definitions)
         {
             host.Children.Add(BuildSection(definition));
@@ -251,7 +268,7 @@ public partial class MainWindow : Window
 
     private void ConfigureScrollBehavior()
     {
-        var scrollViewer = _headlessRootScrollViewer ?? this.FindControl<ScrollViewer>("RootScrollViewer");
+        var scrollViewer = _headlessRootScrollViewer ?? FindNamedControl<ScrollViewer>("RootScrollViewer");
         if (scrollViewer is not null)
         {
             scrollViewer.AddHandler(
@@ -268,10 +285,31 @@ public partial class MainWindow : Window
         _featureAnimationCts.Dispose();
         _featureAnimationCts = new CancellationTokenSource();
 
-        if (this.FindControl<Border>("AnimatedEffectPreview") is { } preview)
+        if (FindNamedControl<Border>("AnimatedEffectPreview") is { } preview)
         {
             _ = RunAnimatedEffectPreviewAsync(preview, _featureAnimationCts.Token);
         }
+    }
+
+    private T? FindNamedControl<T>(string name)
+        where T : Control
+    {
+        try
+        {
+            var named = this.FindControl<T>(name);
+            if (named is not null)
+            {
+                return named;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Headless and dynamically rebuilt shells can lack a parent name scope.
+        }
+
+        return this.GetVisualDescendants()
+            .OfType<T>()
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal));
     }
 
     private static async Task RunAnimatedEffectPreviewAsync(Border preview, CancellationToken cancellationToken)
@@ -279,7 +317,7 @@ public partial class MainWindow : Window
         var animation = new Animation
         {
             Duration = TimeSpan.FromSeconds(3.2d),
-            IterationCount = IterationCount.Infinite,
+            IterationCount = new IterationCount(2ul),
             PlaybackDirection = PlaybackDirection.Alternate,
             FillMode = FillMode.Both,
             Easing = new SineEaseInOut(),
@@ -341,7 +379,11 @@ public partial class MainWindow : Window
 
         try
         {
-            await animation.RunAsync(preview, cancellationToken);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await animation.RunAsync(preview, cancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -497,6 +539,11 @@ public partial class MainWindow : Window
         yield return CreateReactiveGridShaderDefinition();
         yield return CreateWaterRippleShaderDefinition();
         yield return CreateBurningFlameShaderDefinition();
+
+        foreach (var definition in CreateFilterEffectDefinitions())
+        {
+            yield return definition;
+        }
     }
 
     private EffectSectionDefinition CreateTintDefinition()
@@ -978,6 +1025,7 @@ public partial class MainWindow : Window
             Padding = new Thickness(16),
             CornerRadius = new CornerRadius(20),
             Background = new SolidColorBrush(Color.Parse("#FFF8F6F1")),
+            ClipToBounds = true,
             Tag = sectionName + "::" + title + "::Tile"
         };
 
@@ -1119,7 +1167,7 @@ public partial class MainWindow : Window
         root.Children.Add(chips);
 
         root.Children.Add(CreateStatRow("Latency", "14 ms", "#0E9E88"));
-        root.Children.Add(CreateStatRow("Coverage", "17 effects", "#C9781D"));
+        root.Children.Add(CreateStatRow("Coverage", "SVG 1.1 + core", "#C9781D"));
         root.Children.Add(CreateStatRow("Renderer", "Skia", "#2D6CC1"));
 
         return root;

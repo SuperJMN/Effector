@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Effector\Effector.csproj" />
+    <ProjectReference Include="..\..\src\Effector.FilterEffects\Effector.FilterEffects.csproj" />
     <ProjectReference Include="..\Effector.Sample.Effects\Effector.Sample.Effects.csproj" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />

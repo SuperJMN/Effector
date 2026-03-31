@@ -2,7 +2,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:effects="clr-namespace:Effector.Sample.Effects;assembly=Effector.Sample.Effects"
         xmlns:local="clr-namespace:Effector.Sample.App"
         x:Class="Effector.Sample.App.MainWindow"
         x:DataType="local:MainWindowViewModel"
@@ -53,7 +52,7 @@
                        FontSize="38"
                        FontWeight="SemiBold"
                        Foreground="#1E2A2D" />
-            <TextBlock Text="This sample ships custom Skia-backed effects from a separate library, routes them through Avalonia's unchanged Visual.Effect contract, and shows them through code assignment, data binding, inline XAML object elements, string syntax parsing, keyframe animation, runtime SKSL shader passes, and pointer-driven shader uniforms."
+            <TextBlock Text="This sample ships custom Skia-backed effects from separate libraries, routes them through Avalonia's unchanged Visual.Effect contract, and now includes a full SVG 1.1 filter primitive gallery alongside bound effects, inline object elements, parsed strings, keyframe animation, runtime SKSL shader passes, and pointer-driven shader uniforms."
                        FontSize="15"
                        Foreground="#4A5C60"
                        TextWrapping="Wrap" />
@@ -67,11 +66,11 @@
                     CornerRadius="20"
                     Background="#FFF4F7EF">
               <StackPanel Spacing="4">
-                <TextBlock Text="17"
+                <TextBlock Text="32"
                            FontSize="28"
                            FontWeight="Bold"
                            Foreground="#2D584D" />
-                <TextBlock Text="popular sample effects"
+                <TextBlock Text="gallery sections"
                            Foreground="#58716A" />
               </StackPanel>
             </Border>
@@ -178,23 +177,24 @@
                        FontSize="22"
                        FontWeight="SemiBold"
                        Foreground="#1E2A2D" />
-            <TextBlock Text="This card declares a custom PixelateEffect directly in XAML using the same Visual.Effect property you already use for built-in Avalonia effects."
+            <TextBlock Text="This card declares FilterEffect directly from the default Avalonia namespace, so consumers do not need a dedicated xmlns prefix for filter effects."
                        Foreground="#55666B"
                        TextWrapping="Wrap" />
-            <Border CornerRadius="20"
+            <Border x:Name="InlineFilterEffectBorder"
+                    CornerRadius="20"
                     Padding="18"
                     Background="#FFF4FBFE">
               <Border.Effect>
-                <effects:PixelateEffect CellSize="12" />
+                <FilterEffect Padding="24" />
               </Border.Effect>
               <Grid RowDefinitions="Auto,Auto,Auto"
                     RowSpacing="12">
-                <TextBlock Text="Inline XAML effect"
+                <TextBlock Text="No prefix required"
                            FontSize="22"
                            FontWeight="SemiBold"
                            Foreground="#243033" />
                 <TextBlock Grid.Row="1"
-                           Text="Object-element usage stays natural after weaving, which means the custom effect authoring model looks like normal Avalonia XAML."
+                           Text="The FilterEffect object is created from the default xmlns. The sample assigns its immutable primitive graph from code-behind."
                            Foreground="#55666B"
                            TextWrapping="Wrap" />
                 <StackPanel Grid.Row="2"
@@ -203,12 +203,12 @@
                   <Border Padding="10,4"
                           CornerRadius="999"
                           Background="#261E88E5">
-                    <TextBlock Text="xaml object element" Foreground="#1E88E5" />
+                    <TextBlock Text="default xmlns" Foreground="#1E88E5" />
                   </Border>
                   <Border Padding="10,4"
                           CornerRadius="999"
                           Background="#260071C2">
-                    <TextBlock Text="pixelate" Foreground="#0071C2" />
+                    <TextBlock Text="filtereffect" Foreground="#0071C2" />
                   </Border>
                 </StackPanel>
               </Grid>
