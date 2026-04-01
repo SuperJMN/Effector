@@ -1584,6 +1584,11 @@ public sealed class FilterEffectCoverageTests
         Func<Task> action,
         params (string Name, string? Value)[] variables)
     {
+        if (IsHeadlessSampleWindowCoverageDisabled())
+        {
+            return;
+        }
+
         var originals = new string?[variables.Length];
         for (var index = 0; index < variables.Length; index++)
         {
@@ -1610,6 +1615,14 @@ public sealed class FilterEffectCoverageTests
         (string Name, string? Value) third,
         Func<Task> action) =>
         WithSampleEnvironmentAsync(action, first, second, third);
+
+    private static bool IsHeadlessSampleWindowCoverageDisabled()
+    {
+        return string.Equals(
+            Environment.GetEnvironmentVariable("EFFECTOR_SKIP_HEADLESS_SAMPLE_WINDOW_TESTS"),
+            "1",
+            StringComparison.Ordinal);
+    }
 
     private static void SetEnvironmentVariable(string name, string? value)
     {
