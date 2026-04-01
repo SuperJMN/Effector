@@ -2,9 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Markup.Xaml;
 using Avalonia.Media;
-using Avalonia.VisualTree;
 using Effector.FilterEffects;
 using SkiaSharp;
 
@@ -13,35 +11,6 @@ namespace Effector.Sample.App;
 public partial class MainWindow
 {
     private static readonly FilterImageSource SharedFilterImageSource = FilterImageSource.FromPicture(CreateFilterGalleryPicture());
-
-    private void InitializeInlineXamlFilterEffectPreview()
-    {
-        var border = this.GetVisualDescendants()
-            .OfType<Border>()
-            .FirstOrDefault(static candidate => candidate.Name == "InlineFilterEffectBorder");
-        if (border is null)
-        {
-            return;
-        }
-
-        var parsedBorder = AvaloniaRuntimeXamlLoader.Parse<Border>(
-            """
-            <Border xmlns="https://github.com/avaloniaui">
-              <Border.Effect>
-                <FilterEffect Padding="24" />
-              </Border.Effect>
-            </Border>
-            """,
-            typeof(FilterEffect).Assembly);
-
-        if ((object?)parsedBorder.Effect is not FilterEffect effect)
-        {
-            return;
-        }
-
-        effect.Primitives = CreateInlineXamlPreviewGraph();
-        border.Effect = AsAvaloniaEffect(effect);
-    }
 
     private IEnumerable<EffectSectionDefinition> CreateFilterEffectDefinitions()
     {
@@ -655,26 +624,6 @@ public partial class MainWindow
             codeExample,
             static _ => { },
             buildPreviewContent);
-    }
-
-    private static FilterPrimitiveCollection CreateInlineXamlPreviewGraph()
-    {
-        return new FilterPrimitiveCollection(
-            new GaussianBlurPrimitive(stdDeviationX: 4d, result: "blur"),
-            new OffsetPrimitive(dx: 6d, dy: 4d, input: FilterInput.Named("blur"), result: "offset"),
-            new FloodPrimitive(
-                Color.Parse("#7A0A84FF"),
-                opacity: 0.9d,
-                result: "wash"),
-            new CompositePrimitive(
-                FilterCompositeOperator.In,
-                input: FilterInput.Named("wash"),
-                input2: FilterInput.Named("offset"),
-                result: "shadow"),
-            new MergePrimitive(
-                new FilterInputCollection(
-                    FilterInput.Named("shadow"),
-                    FilterInput.SourceGraphic)));
     }
 
     private static SKPicture CreateFilterGalleryPicture()

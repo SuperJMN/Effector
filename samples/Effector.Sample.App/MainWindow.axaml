@@ -173,25 +173,25 @@
                 BorderBrush="#22003845"
                 BorderThickness="1">
           <StackPanel Spacing="14">
-            <TextBlock Text="Runtime XAML Object Element"
+            <TextBlock Text="SVG-Style XAML Filter"
                        FontSize="22"
                        FontWeight="SemiBold"
                        Foreground="#1E2A2D" />
-            <TextBlock Text="This card parses FilterEffect from runtime XAML using the default Avalonia namespace, so consumers still do not need a dedicated xmlns prefix for filter effects."
+            <TextBlock Text="This card declares the filter directly in MainWindow.axaml using the default Avalonia namespace, so the SVG-style object model works in normal XAML without a dedicated prefix."
                        Foreground="#55666B"
                        TextWrapping="Wrap" />
             <Border x:Name="InlineFilterEffectBorder"
                     CornerRadius="20"
                     Padding="18"
                     Background="#FFF4FBFE">
-              <Grid RowDefinitions="Auto,Auto,Auto"
+              <Grid RowDefinitions="Auto,Auto,Auto,Auto"
                     RowSpacing="12">
                 <TextBlock Text="No prefix required"
                            FontSize="22"
                            FontWeight="SemiBold"
                            Foreground="#243033" />
                 <TextBlock Grid.Row="1"
-                           Text="The FilterEffect instance is parsed from runtime XAML in the default xmlns. The sample assigns its immutable primitive graph from code-behind."
+                           Text="The effect on this card is authored inline in compiled XAML with SVG-style child elements such as feFlood, feComposite, and feMerge."
                            Foreground="#55666B"
                            TextWrapping="Wrap" />
                 <StackPanel Grid.Row="2"
@@ -205,9 +205,66 @@
                   <Border Padding="10,4"
                           CornerRadius="999"
                           Background="#260071C2">
-                    <TextBlock Text="filtereffect" Foreground="#0071C2" />
+                    <TextBlock Text="compiled xaml" Foreground="#0071C2" />
                   </Border>
                 </StackPanel>
+                <Border Grid.Row="3"
+                        Padding="18"
+                        CornerRadius="18"
+                        Background="#FFFFF5DE">
+                  <Grid ColumnDefinitions="Auto,*"
+                        ColumnSpacing="18">
+                    <Grid x:Name="InlineFilterEffectPreviewSurface"
+                          Width="190"
+                          Height="104"
+                          HorizontalAlignment="Left"
+                          VerticalAlignment="Center">
+                      <Grid.Effect>
+                        <filter Padding="24">
+                          <feGaussianBlur stdDeviation="4" result="blur" />
+                          <feOffset in="blur" dx="6" dy="4" result="offset" />
+                          <feFlood floodColor="#7A0A84FF" floodOpacity="0.9" result="wash" />
+                          <feComposite operator="in" in="wash" in2="offset" result="shadow" />
+                          <feMerge>
+                            <feMergeNode in="shadow" />
+                            <feMergeNode in="SourceGraphic" />
+                          </feMerge>
+                        </filter>
+                      </Grid.Effect>
+                      <Border Width="96"
+                              Height="58"
+                              CornerRadius="22"
+                              Background="#FF0A84FF"
+                              HorizontalAlignment="Left"
+                              VerticalAlignment="Top" />
+                      <Border Width="52"
+                              Height="52"
+                              CornerRadius="26"
+                              Background="#FFFFC857"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Top"
+                              Margin="0,4,8,0" />
+                      <Border Width="124"
+                              Height="14"
+                              CornerRadius="7"
+                              Background="#FF243033"
+                              HorizontalAlignment="Left"
+                              VerticalAlignment="Bottom"
+                              Margin="0,0,0,8" />
+                    </Grid>
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="8">
+                      <TextBlock Text="Inline object graph"
+                                 FontSize="18"
+                                 FontWeight="SemiBold"
+                                 Foreground="#243033" />
+                      <TextBlock Text="The preview on the left is filtered directly from compiled XAML, so the shadow graph is authored where the control is declared."
+                                 Foreground="#55666B"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
               </Grid>
             </Border>
           </StackPanel>

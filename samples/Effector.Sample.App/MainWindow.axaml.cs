@@ -173,8 +173,6 @@ public partial class MainWindow : Window
 
     private void OnOpened(object? sender, EventArgs e)
     {
-        InitializeInlineXamlFilterEffectPreview();
-
         if (!IsEnvironmentSwitchEnabled("EFFECTOR_SAMPLE_DISABLE_FEATURE_ANIMATIONS"))
         {
             StartFeatureAnimations();

@@ -224,6 +224,111 @@ public sealed class FilterEffectCoverageTests
     }
 
     [Fact]
+    public async Task MainWindow_InlineSvgXamlPreview_Compiles_To_Expected_Filter_Graph()
+    {
+        await WithSampleEnvironmentAsync(
+            ("EFFECTOR_SAMPLE_HEADLESS_SAFE_MODE", null),
+            ("EFFECTOR_SAMPLE_HIDE_FEATURE_ROWS", null),
+            ("EFFECTOR_SAMPLE_LIMIT_SECTIONS", "0"),
+            async () =>
+            {
+                await Session.Dispatch(() =>
+                {
+                    var window = new MainWindow
+                    {
+                        Width = 1400d,
+                        Height = 980d
+                    };
+
+                    window.Show();
+                    window.UpdateLayout();
+
+                    var previewSurface = window.GetVisualDescendants()
+                        .OfType<Grid>()
+                        .FirstOrDefault(static candidate => candidate.Name == "InlineFilterEffectPreviewSurface");
+                    Assert.NotNull(previewSurface);
+
+                    var effect = Assert.IsAssignableFrom<FilterEffect>(previewSurface!.Effect);
+                    Assert.Equal(5, effect.Primitives.Count);
+                    Assert.IsType<GaussianBlurPrimitive>(effect.Primitives[0]);
+                    Assert.IsType<OffsetPrimitive>(effect.Primitives[1]);
+                    Assert.IsType<FloodPrimitive>(effect.Primitives[2]);
+                    Assert.IsType<CompositePrimitive>(effect.Primitives[3]);
+                    Assert.IsType<MergePrimitive>(effect.Primitives[4]);
+                }, CancellationToken.None);
+            });
+    }
+
+    [Fact]
+    public async Task MainWindow_InlineSvgXamlPreview_Differs_From_Baseline()
+    {
+        await WithSampleEnvironmentAsync(
+            async () =>
+            {
+                await Session.Dispatch(() =>
+                {
+                    var window = new MainWindow
+                    {
+                        Width = 1400d,
+                        Height = 980d
+                    };
+
+                    window.Show();
+                    window.UpdateLayout();
+
+                    var previewSurface = window.GetVisualDescendants()
+                        .OfType<Grid>()
+                        .FirstOrDefault(static candidate => candidate.Name == "InlineFilterEffectPreviewSurface");
+                    Assert.NotNull(previewSurface);
+                    Assert.NotNull(previewSurface!.Effect);
+
+                    var origin = previewSurface.TranslatePoint(default, window);
+                    Assert.True(origin.HasValue);
+
+                    var previewRect = InflateRect(
+                        new SKRectI(
+                            (int)Math.Floor(origin!.Value.X),
+                            (int)Math.Floor(origin.Value.Y),
+                            (int)Math.Ceiling(origin.Value.X + previewSurface.Bounds.Width),
+                            (int)Math.Ceiling(origin.Value.Y + previewSurface.Bounds.Height)),
+                        18,
+                        (int)Math.Ceiling(window.Bounds.Width),
+                        (int)Math.Ceiling(window.Bounds.Height));
+
+                    using var effectedFrame = window.CaptureRenderedFrame();
+                    Assert.NotNull(effectedFrame);
+
+                    var originalEffect = previewSurface.Effect;
+                    previewSurface.Effect = null;
+                    window.UpdateLayout();
+
+                    using var baselineFrame = window.CaptureRenderedFrame();
+                    Assert.NotNull(baselineFrame);
+
+                    using var effectedBitmap = DecodeBitmap(effectedFrame!);
+                    using var baselineBitmap = DecodeBitmap(baselineFrame!);
+
+                    var changedPixels = CountDifferentPixelsInsideRect(
+                        baselineBitmap,
+                        effectedBitmap,
+                        previewRect,
+                        step: 2,
+                        tolerance: 8);
+
+                    previewSurface.Effect = originalEffect;
+
+                    Assert.True(
+                        changedPixels >= 240,
+                        $"Expected the inline SVG-style XAML preview to differ from baseline, but only found {changedPixels} sampled changed pixels.");
+                }, CancellationToken.None);
+            },
+            ("EFFECTOR_SAMPLE_HEADLESS_SAFE_MODE", null),
+            ("EFFECTOR_SAMPLE_HIDE_FEATURE_ROWS", null),
+            ("EFFECTOR_SAMPLE_LIMIT_SECTIONS", "0"),
+            ("EFFECTOR_SAMPLE_DISABLE_FEATURE_ANIMATIONS", "1"));
+    }
+
+    [Fact]
     public async Task MainWindow_XamlPath_FirstFilterGallerySection_Renders_NonBlank_Frame()
     {
         await WithSampleEnvironmentAsync(
@@ -1476,18 +1581,15 @@ public sealed class FilterEffectCoverageTests
     }
 
     private static async Task WithSampleEnvironmentAsync(
-        (string Name, string? Value) first,
-        (string Name, string? Value) second,
-        (string Name, string? Value) third,
-        Func<Task> action)
+        Func<Task> action,
+        params (string Name, string? Value)[] variables)
     {
-        var firstOriginal = Environment.GetEnvironmentVariable(first.Name);
-        var secondOriginal = Environment.GetEnvironmentVariable(second.Name);
-        var thirdOriginal = Environment.GetEnvironmentVariable(third.Name);
-
-        SetEnvironmentVariable(first.Name, first.Value);
-        SetEnvironmentVariable(second.Name, second.Value);
-        SetEnvironmentVariable(third.Name, third.Value);
+        var originals = new string?[variables.Length];
+        for (var index = 0; index < variables.Length; index++)
+        {
+            originals[index] = Environment.GetEnvironmentVariable(variables[index].Name);
+            SetEnvironmentVariable(variables[index].Name, variables[index].Value);
+        }
 
         try
         {
@@ -1495,11 +1597,19 @@ public sealed class FilterEffectCoverageTests
         }
         finally
         {
-            SetEnvironmentVariable(first.Name, firstOriginal);
-            SetEnvironmentVariable(second.Name, secondOriginal);
-            SetEnvironmentVariable(third.Name, thirdOriginal);
+            for (var index = 0; index < variables.Length; index++)
+            {
+                SetEnvironmentVariable(variables[index].Name, originals[index]);
+            }
         }
     }
+
+    private static Task WithSampleEnvironmentAsync(
+        (string Name, string? Value) first,
+        (string Name, string? Value) second,
+        (string Name, string? Value) third,
+        Func<Task> action) =>
+        WithSampleEnvironmentAsync(action, first, second, third);
 
     private static void SetEnvironmentVariable(string name, string? value)
     {
