@@ -440,6 +440,55 @@ public sealed class FilterEffectCoverageTests
 
     [Theory]
     [MemberData(nameof(GeneratedWindowPrimitiveGraphs))]
+    public void GeneratedSourcePrimitives_Preserve_Local_Content_When_SceneBounds_Translate(
+        string primitiveName,
+        FilterPrimitiveCollection primitives)
+    {
+        const int contentWidth = 220;
+        const int contentHeight = 140;
+
+        var firstSceneBounds = new Rect(48d, 72d, contentWidth, contentHeight);
+        var secondSceneBounds = new Rect(164d, 219d, contentWidth, contentHeight);
+        var inputBounds = new Rect(0d, 0d, contentWidth, contentHeight);
+
+        using var firstFilter = CreateFilter(primitives, inputBounds, firstSceneBounds);
+        using var secondFilter = CreateFilter(primitives, inputBounds, secondSceneBounds);
+
+        using var firstRender = ApplyEffectFilterViaSceneSaveLayer(
+            520,
+            420,
+            SKRect.Create((float)firstSceneBounds.X, (float)firstSceneBounds.Y, contentWidth, contentHeight),
+            firstFilter!,
+            canvas => DrawImageBoundsProbeSourceAt(canvas, (float)firstSceneBounds.X, (float)firstSceneBounds.Y, contentWidth, contentHeight));
+        using var secondRender = ApplyEffectFilterViaSceneSaveLayer(
+            520,
+            420,
+            SKRect.Create((float)secondSceneBounds.X, (float)secondSceneBounds.Y, contentWidth, contentHeight),
+            secondFilter!,
+            canvas => DrawImageBoundsProbeSourceAt(canvas, (float)secondSceneBounds.X, (float)secondSceneBounds.Y, contentWidth, contentHeight));
+
+        var firstHash = HashBitmapRect(
+            firstRender,
+            new SKRectI(
+                (int)firstSceneBounds.X,
+                (int)firstSceneBounds.Y,
+                (int)firstSceneBounds.Right,
+                (int)firstSceneBounds.Bottom));
+        var secondHash = HashBitmapRect(
+            secondRender,
+            new SKRectI(
+                (int)secondSceneBounds.X,
+                (int)secondSceneBounds.Y,
+                (int)secondSceneBounds.Right,
+                (int)secondSceneBounds.Bottom));
+
+        Assert.True(
+            string.Equals(firstHash, secondHash, StringComparison.Ordinal),
+            $"{primitiveName} changed when only scene position changed.");
+    }
+
+    [Theory]
+    [MemberData(nameof(GeneratedWindowPrimitiveGraphs))]
     public async Task GeneratedSourcePrimitives_DoNot_Render_At_Window_Origin_When_Host_Is_Translated(
         string primitiveName,
         FilterPrimitiveCollection primitives)
@@ -725,6 +774,99 @@ public sealed class FilterEffectCoverageTests
                     Assert.True(
                         changedPixels >= 120,
                         $"Expected {sectionName} After preview to differ from the baseline, but only found {changedPixels} sampled changed pixels.");
+                }, CancellationToken.None);
+            });
+    }
+
+    [Fact]
+    public async Task SvgFeImage_After_Preview_Remains_Stable_Across_Scroll_Offsets()
+    {
+        await WithSampleEnvironmentAsync(
+            ("EFFECTOR_SAMPLE_HIDE_FEATURE_ROWS", "1"),
+            ("EFFECTOR_SAMPLE_DISABLE_FEATURE_ANIMATIONS", "1"),
+            ("EFFECTOR_SAMPLE_LIMIT_SECTIONS", null),
+            async () =>
+            {
+                await Session.Dispatch(() =>
+                {
+                    var window = new MainWindow
+                    {
+                        Width = 1600d,
+                        Height = 1200d
+                    };
+
+                    window.Show();
+                    window.UpdateLayout();
+
+                    var scrollViewer = window.Content as ScrollViewer
+                        ?? window.GetVisualDescendants()
+                            .OfType<ScrollViewer>()
+                            .FirstOrDefault(candidate => string.Equals(candidate.Name, "RootScrollViewer", StringComparison.Ordinal));
+                    Assert.NotNull(scrollViewer);
+
+                    const string sectionName = "SVG feImage";
+                    var section = window.GetVisualDescendants()
+                        .OfType<Border>()
+                        .FirstOrDefault(candidate => Equals(candidate.Tag, sectionName + "::Section"));
+                    Assert.NotNull(section);
+
+                    section!.BringIntoView();
+                    window.UpdateLayout();
+
+                    var afterPreview = window.GetVisualDescendants()
+                        .OfType<Control>()
+                        .FirstOrDefault(candidate => Equals(candidate.Tag, sectionName + "::After"));
+                    Assert.NotNull(afterPreview);
+
+                    using var initialFrame = window.CaptureRenderedFrame();
+                    Assert.NotNull(initialFrame);
+
+                    var initialOrigin = afterPreview!.TranslatePoint(default, window);
+                    Assert.True(initialOrigin.HasValue);
+
+                    var initialRect = ShrinkRect(
+                        new SKRectI(
+                            (int)Math.Floor(initialOrigin!.Value.X),
+                            (int)Math.Floor(initialOrigin.Value.Y),
+                            (int)Math.Ceiling(initialOrigin.Value.X + afterPreview.Bounds.Width),
+                            (int)Math.Ceiling(initialOrigin.Value.Y + afterPreview.Bounds.Height)),
+                        8);
+
+                    var maxOffsetY = Math.Max(0d, scrollViewer!.Extent.Height - scrollViewer.Viewport.Height);
+                    var nextOffsetY = initialOrigin.Value.Y > 160d
+                        ? Math.Min(maxOffsetY, scrollViewer.Offset.Y + 96d)
+                        : Math.Max(0d, scrollViewer.Offset.Y - 96d);
+
+                    Assert.NotEqual(scrollViewer.Offset.Y, nextOffsetY);
+                    scrollViewer.Offset = new Vector(scrollViewer.Offset.X, nextOffsetY);
+                    window.UpdateLayout();
+
+                    using var scrolledFrame = window.CaptureRenderedFrame();
+                    Assert.NotNull(scrolledFrame);
+
+                    var scrolledOrigin = afterPreview.TranslatePoint(default, window);
+                    Assert.True(scrolledOrigin.HasValue);
+
+                    var scrolledRect = ShrinkRect(
+                        new SKRectI(
+                            (int)Math.Floor(scrolledOrigin!.Value.X),
+                            (int)Math.Floor(scrolledOrigin.Value.Y),
+                            (int)Math.Ceiling(scrolledOrigin.Value.X + afterPreview.Bounds.Width),
+                            (int)Math.Ceiling(scrolledOrigin.Value.Y + afterPreview.Bounds.Height)),
+                        8);
+
+                    Assert.Equal(initialRect.Width, scrolledRect.Width);
+                    Assert.Equal(initialRect.Height, scrolledRect.Height);
+
+                    using var initialBitmap = DecodeBitmap(initialFrame!);
+                    using var scrolledBitmap = DecodeBitmap(scrolledFrame!);
+
+                    var initialHash = HashBitmapRect(initialBitmap, initialRect);
+                    var scrolledHash = HashBitmapRect(scrolledBitmap, scrolledRect);
+
+                    Assert.True(
+                        string.Equals(initialHash, scrolledHash, StringComparison.Ordinal),
+                        "SVG feImage changed when the sample window scroll offset changed.");
                 }, CancellationToken.None);
             });
     }
@@ -1291,6 +1433,20 @@ public sealed class FilterEffectCoverageTests
         return Convert.ToHexString(SHA256.HashData(data.ToArray()));
     }
 
+    private static string HashBitmapRect(SKBitmap bitmap, SKRectI rect)
+    {
+        using var subset = new SKBitmap(rect.Width, rect.Height);
+        for (var y = 0; y < rect.Height; y++)
+        {
+            for (var x = 0; x < rect.Width; x++)
+            {
+                subset.SetPixel(x, y, bitmap.GetPixel(rect.Left + x, rect.Top + y));
+            }
+        }
+
+        return HashBitmap(subset);
+    }
+
     private static bool ContainsVisiblePixels(SKBitmap bitmap)
     {
         for (var y = 0; y < bitmap.Height; y++)
@@ -1552,6 +1708,25 @@ public sealed class FilterEffectCoverageTests
                         Primitives = primitives
                     };
                     var context = new SkiaEffectContext(1d, usesOpacitySaveLayer: false, inputBounds);
+
+                    Assert.True(EffectorRuntime.TryCreateFilter(EffectTestHelpers.AsEffect(effect), context, out var filter));
+                    Assert.NotNull(filter);
+                    return filter!;
+                },
+                CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+    private static SKImageFilter CreateFilter(FilterPrimitiveCollection primitives, Rect inputBounds, Rect sceneBounds) =>
+        Session.Dispatch(
+                () =>
+                {
+                    var effect = new FilterEffect
+                    {
+                        Padding = new Thickness(24d),
+                        Primitives = primitives
+                    };
+                    var context = new SkiaEffectContext(1d, usesOpacitySaveLayer: false, inputBounds, sceneBounds);
 
                     Assert.True(EffectorRuntime.TryCreateFilter(EffectTestHelpers.AsEffect(effect), context, out var filter));
                     Assert.NotNull(filter);

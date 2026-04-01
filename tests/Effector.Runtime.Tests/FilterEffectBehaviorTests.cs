@@ -271,7 +271,7 @@ public sealed class FilterEffectBehaviorTests
     }
 
     [Fact]
-    public void FilterEffect_Skips_SourceCapture_For_Generated_Only_Graphs()
+    public void FilterEffect_Requires_SourceCapture_For_Generated_Source_Graphs()
     {
         var effect = new FilterEffect
         {
@@ -284,18 +284,79 @@ public sealed class FilterEffectBehaviorTests
             "RequiresSourceCapture",
             BindingFlags.Static | BindingFlags.NonPublic)!;
 
-        Assert.False((bool)requiresSourceCaptureMethod.Invoke(null, new object[] { EffectTestHelpers.AsEffect(effect) })!);
+        Assert.True((bool)requiresSourceCaptureMethod.Invoke(null, new object[] { EffectTestHelpers.AsEffect(effect) })!);
 
         var immutable = EffectExtensions.ToImmutable(EffectTestHelpers.AsEffect(effect));
-        Assert.False((bool)requiresSourceCaptureMethod.Invoke(null, new object[] { immutable })!);
+        Assert.True((bool)requiresSourceCaptureMethod.Invoke(null, new object[] { immutable })!);
     }
 
     [Fact]
-    public void FilterEffect_Requires_SourceCapture_When_Graph_Uses_SourceGraphic()
+    public void FilterEffect_Prefers_Unclipped_HostBounds_For_Generated_Source_Graphs()
+    {
+        var effect = new FilterEffect
+        {
+            Primitives = new FilterPrimitiveCollection(
+                new ImagePrimitive(
+                    FilterImageSource.FromPicture(CreatePictureSource()),
+                    FilterAspectRatio.Default))
+        };
+
+        var prefersHostBoundsMethod = typeof(EffectorRuntime).GetMethod(
+            "PrefersUnclippedHostBounds",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        Assert.True((bool)prefersHostBoundsMethod.Invoke(null, new object[] { EffectTestHelpers.AsEffect(effect) })!);
+
+        var immutable = EffectExtensions.ToImmutable(EffectTestHelpers.AsEffect(effect));
+        Assert.True((bool)prefersHostBoundsMethod.Invoke(null, new object[] { immutable })!);
+    }
+
+    [Fact]
+    public void FilterEffect_Does_Not_Prefer_Unclipped_HostBounds_For_SourceGraphic_Graphs()
+    {
+        var effect = new FilterEffect
+        {
+            Primitives = new FilterPrimitiveCollection(
+                new GaussianBlurPrimitive(stdDeviationX: 4d, stdDeviationY: 4d))
+        };
+
+        var prefersHostBoundsMethod = typeof(EffectorRuntime).GetMethod(
+            "PrefersUnclippedHostBounds",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        Assert.False((bool)prefersHostBoundsMethod.Invoke(null, new object[] { EffectTestHelpers.AsEffect(effect) })!);
+
+        var immutable = EffectExtensions.ToImmutable(EffectTestHelpers.AsEffect(effect));
+        Assert.False((bool)prefersHostBoundsMethod.Invoke(null, new object[] { immutable })!);
+    }
+
+    [Fact]
+    public void FilterEffect_Requires_SourceCapture_For_SourceGraphic_Graphs()
     {
         var effect = new FilterEffect
         {
             Primitives = CreateDropShadowLikeGraph()
+        };
+
+        var requiresSourceCaptureMethod = typeof(EffectorRuntime).GetMethod(
+            "RequiresSourceCapture",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        Assert.True((bool)requiresSourceCaptureMethod.Invoke(null, new object[] { EffectTestHelpers.AsEffect(effect) })!);
+
+        var immutable = EffectExtensions.ToImmutable(EffectTestHelpers.AsEffect(effect));
+        Assert.True((bool)requiresSourceCaptureMethod.Invoke(null, new object[] { immutable })!);
+    }
+
+    [Fact]
+    public void FilterEffect_Requires_SourceCapture_For_Tile_Graphs()
+    {
+        var effect = new FilterEffect
+        {
+            Primitives = new FilterPrimitiveCollection(
+                new TilePrimitive(
+                    sourceRect: new Rect(20d, 20d, 110d, 70d),
+                    destinationRect: new Rect(0d, 0d, 220d, 140d)))
         };
 
         var requiresSourceCaptureMethod = typeof(EffectorRuntime).GetMethod(
@@ -326,5 +387,45 @@ public sealed class FilterEffectBehaviorTests
                 new FilterInputCollection(
                     FilterInput.Named("shadow"),
                     FilterInput.SourceGraphic)));
+    }
+
+    private static SKPicture CreatePictureSource()
+    {
+        using var recorder = new SKPictureRecorder();
+        var canvas = recorder.BeginRecording(SKRect.Create(0f, 0f, 220f, 140f));
+
+        using (var backgroundPaint = new SKPaint
+               {
+                   IsAntialias = true,
+                   Shader = SKShader.CreateLinearGradient(
+                       new SKPoint(0f, 0f),
+                       new SKPoint(220f, 140f),
+                       new[]
+                       {
+                           new SKColor(20, 180, 168),
+                           new SKColor(255, 202, 64)
+                       },
+                       null,
+                       SKShaderTileMode.Clamp)
+               })
+        {
+            canvas.DrawRect(SKRect.Create(0f, 0f, 220f, 140f), backgroundPaint);
+        }
+
+        using (var mountainPaint = new SKPaint { Color = new SKColor(32, 61, 89), IsAntialias = true })
+        {
+            var mountain = new SKPath();
+            mountain.MoveTo(0f, 120f);
+            mountain.LineTo(44f, 60f);
+            mountain.LineTo(122f, 132f);
+            mountain.LineTo(178f, 74f);
+            mountain.LineTo(220f, 120f);
+            mountain.LineTo(220f, 140f);
+            mountain.LineTo(0f, 140f);
+            mountain.Close();
+            canvas.DrawPath(mountain, mountainPaint);
+        }
+
+        return recorder.EndRecording();
     }
 }

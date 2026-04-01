@@ -11,6 +11,22 @@ namespace Effector.FilterEffects;
 
 internal static class FilterEffectBuilder
 {
+    private sealed class FilterGraphAnalysis
+    {
+        public FilterGraphAnalysis(bool requiresSourceCapture, bool usesNamedResults, bool prefersUnclippedHostBounds)
+        {
+            RequiresSourceCapture = requiresSourceCapture;
+            UsesNamedResults = usesNamedResults;
+            PrefersUnclippedHostBounds = prefersUnclippedHostBounds;
+        }
+
+        public bool RequiresSourceCapture { get; }
+
+        public bool UsesNamedResults { get; }
+
+        public bool PrefersUnclippedHostBounds { get; }
+    }
+
     private sealed class FilterDependencyHolder
     {
         public FilterDependencyHolder(object[] dependencies)
@@ -37,40 +53,33 @@ internal static class FilterEffectBuilder
     private static readonly char[] ColorMatrixSplitChars = { ' ', '\t', '\n', '\r', ',' };
     private static readonly FilterComponentTransferChannel IdentityChannel = FilterComponentTransferChannel.Identity;
     private static readonly ConditionalWeakTable<SKImageFilter, FilterDependencyHolder> FilterDependencies = new();
+    private static readonly ConditionalWeakTable<FilterPrimitiveCollection, FilterGraphAnalysis> FilterGraphAnalyses = new();
 
     public static bool RequiresSourceCapture(FilterPrimitiveCollection primitives)
     {
-        if (primitives.Count == 0)
-        {
-            return false;
-        }
+        ArgumentNullException.ThrowIfNull(primitives);
+        return GetGraphAnalysis(primitives).RequiresSourceCapture;
+    }
 
-        var namedResults = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var previousNeedsSource = false;
-
-        for (var index = 0; index < primitives.Count; index++)
-        {
-            var primitive = primitives[index];
-            var needsSource = PrimitiveRequiresSourceCapture(primitive, namedResults, previousNeedsSource, index == 0);
-            previousNeedsSource = needsSource;
-
-            if (!string.IsNullOrWhiteSpace(primitive.Result))
-            {
-                namedResults[primitive.Result!] = needsSource;
-            }
-        }
-
-        return previousNeedsSource;
+    public static bool PrefersUnclippedHostBounds(FilterPrimitiveCollection primitives)
+    {
+        ArgumentNullException.ThrowIfNull(primitives);
+        return GetGraphAnalysis(primitives).PrefersUnclippedHostBounds;
     }
 
     public static SKImageFilter? Build(FilterPrimitiveCollection primitives, SkiaEffectContext context)
     {
+        ArgumentNullException.ThrowIfNull(primitives);
+
         if (primitives.Count == 0)
         {
             return null;
         }
 
-        var results = new Dictionary<string, FilterResult>(StringComparer.Ordinal);
+        var analysis = GetGraphAnalysis(primitives);
+        Dictionary<string, FilterResult>? results = analysis.UsesNamedResults
+            ? new Dictionary<string, FilterResult>(StringComparer.Ordinal)
+            : null;
         FilterResult? lastResult = null;
 
         for (var index = 0; index < primitives.Count; index++)
@@ -84,13 +93,83 @@ internal static class FilterEffectBuilder
 
             lastResult = built.Value;
 
-            if (!string.IsNullOrWhiteSpace(primitive.Result))
+            if (results is not null && !string.IsNullOrWhiteSpace(primitive.Result))
             {
                 results[primitive.Result!] = built.Value;
             }
         }
 
         return lastResult?.Filter;
+    }
+
+    private static FilterGraphAnalysis GetGraphAnalysis(FilterPrimitiveCollection primitives) =>
+        FilterGraphAnalyses.GetValue(primitives, AnalyzeGraph);
+
+    private static FilterGraphAnalysis AnalyzeGraph(FilterPrimitiveCollection primitives)
+    {
+        if (primitives.Count == 0)
+        {
+            return new FilterGraphAnalysis(requiresSourceCapture: false, usesNamedResults: false, prefersUnclippedHostBounds: false);
+        }
+
+        var namedResults = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var namedStableBounds = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var previousNeedsSource = false;
+        var previousNeedsStableBounds = false;
+        var usesNamedResults = false;
+
+        for (var index = 0; index < primitives.Count; index++)
+        {
+            var primitive = primitives[index];
+            if (!usesNamedResults && PrimitiveUsesNamedResults(primitive))
+            {
+                usesNamedResults = true;
+            }
+
+            var needsSource = PrimitiveRequiresSourceCapture(primitive, namedResults, previousNeedsSource, index == 0);
+            var needsStableBounds = PrimitivePrefersUnclippedHostBounds(primitive, namedStableBounds, previousNeedsStableBounds, index == 0);
+            previousNeedsSource = needsSource;
+            previousNeedsStableBounds = needsStableBounds;
+
+            if (!string.IsNullOrWhiteSpace(primitive.Result))
+            {
+                namedResults[primitive.Result!] = needsSource;
+                namedStableBounds[primitive.Result!] = needsStableBounds;
+            }
+        }
+
+        return new FilterGraphAnalysis(previousNeedsSource, usesNamedResults, previousNeedsStableBounds);
+    }
+
+    private static bool PrimitivePrefersUnclippedHostBounds(
+        FilterPrimitive primitive,
+        Dictionary<string, bool> namedResults,
+        bool previousNeedsStableBounds,
+        bool isFirst)
+    {
+        return primitive switch
+        {
+            BlendPrimitive blend => InputPrefersUnclippedHostBounds(blend.Input, namedResults, previousNeedsStableBounds, isFirst) ||
+                                    InputPrefersUnclippedHostBounds(blend.Input2, namedResults, previousNeedsStableBounds, isFirst: false),
+            ColorMatrixPrimitive colorMatrix => InputPrefersUnclippedHostBounds(colorMatrix.Input, namedResults, previousNeedsStableBounds, isFirst),
+            ComponentTransferPrimitive componentTransfer => InputPrefersUnclippedHostBounds(componentTransfer.Input, namedResults, previousNeedsStableBounds, isFirst),
+            CompositePrimitive composite => InputPrefersUnclippedHostBounds(composite.Input, namedResults, previousNeedsStableBounds, isFirst) ||
+                                            InputPrefersUnclippedHostBounds(composite.Input2, namedResults, previousNeedsStableBounds, isFirst: false),
+            ConvolveMatrixPrimitive convolve => InputPrefersUnclippedHostBounds(convolve.Input, namedResults, previousNeedsStableBounds, isFirst),
+            DiffuseLightingPrimitive => true,
+            DisplacementMapPrimitive displacement => InputPrefersUnclippedHostBounds(displacement.Input, namedResults, previousNeedsStableBounds, isFirst) ||
+                                                     InputPrefersUnclippedHostBounds(displacement.Input2, namedResults, previousNeedsStableBounds, isFirst: false),
+            FloodPrimitive => true,
+            GaussianBlurPrimitive blur => InputPrefersUnclippedHostBounds(blur.Input, namedResults, previousNeedsStableBounds, isFirst),
+            ImagePrimitive => true,
+            MergePrimitive merge => MergePrefersUnclippedHostBounds(merge, namedResults, previousNeedsStableBounds, isFirst),
+            MorphologyPrimitive morphology => InputPrefersUnclippedHostBounds(morphology.Input, namedResults, previousNeedsStableBounds, isFirst),
+            OffsetPrimitive offset => InputPrefersUnclippedHostBounds(offset.Input, namedResults, previousNeedsStableBounds, isFirst),
+            SpecularLightingPrimitive => true,
+            TilePrimitive => true,
+            TurbulencePrimitive => true,
+            _ => true
+        };
     }
 
     private static bool PrimitiveRequiresSourceCapture(
@@ -108,18 +187,22 @@ internal static class FilterEffectBuilder
             CompositePrimitive composite => InputRequiresSourceCapture(composite.Input, namedResults, previousNeedsSource, isFirst) ||
                                             InputRequiresSourceCapture(composite.Input2, namedResults, previousNeedsSource, isFirst: false),
             ConvolveMatrixPrimitive convolve => InputRequiresSourceCapture(convolve.Input, namedResults, previousNeedsSource, isFirst),
-            DiffuseLightingPrimitive diffuse => InputRequiresSourceCapture(diffuse.Input, namedResults, previousNeedsSource, isFirst),
+            DiffuseLightingPrimitive => true,
             DisplacementMapPrimitive displacement => InputRequiresSourceCapture(displacement.Input, namedResults, previousNeedsSource, isFirst) ||
                                                      InputRequiresSourceCapture(displacement.Input2, namedResults, previousNeedsSource, isFirst: false),
-            FloodPrimitive => false,
+            FloodPrimitive => true,
             GaussianBlurPrimitive blur => InputRequiresSourceCapture(blur.Input, namedResults, previousNeedsSource, isFirst),
-            ImagePrimitive => false,
+            ImagePrimitive => true,
             MergePrimitive merge => MergeRequiresSourceCapture(merge, namedResults, previousNeedsSource, isFirst),
             MorphologyPrimitive morphology => InputRequiresSourceCapture(morphology.Input, namedResults, previousNeedsSource, isFirst),
             OffsetPrimitive offset => InputRequiresSourceCapture(offset.Input, namedResults, previousNeedsSource, isFirst),
-            SpecularLightingPrimitive specular => InputRequiresSourceCapture(specular.Input, namedResults, previousNeedsSource, isFirst),
-            TilePrimitive tile => InputRequiresSourceCapture(tile.Input, namedResults, previousNeedsSource, isFirst),
-            TurbulencePrimitive => false,
+            SpecularLightingPrimitive => true,
+            // `feTile` is the current exception: Skia's tile filter does not reliably preserve
+            // our sampled source region when fed only the implicit save-layer input in the
+            // gallery/runtime path. Keep it on the captured-source lane until there is a
+            // dedicated implicit-input implementation.
+            TilePrimitive => true,
+            TurbulencePrimitive => true,
             _ => true
         };
     }
@@ -138,6 +221,28 @@ internal static class FilterEffectBuilder
         for (var index = 0; index < primitive.Inputs.Count; index++)
         {
             if (InputRequiresSourceCapture(primitive.Inputs[index], namedResults, previousNeedsSource, isFirst && index == 0))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MergePrefersUnclippedHostBounds(
+        MergePrimitive primitive,
+        Dictionary<string, bool> namedResults,
+        bool previousNeedsStableBounds,
+        bool isFirst)
+    {
+        if (primitive.Inputs.Count == 0)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < primitive.Inputs.Count; index++)
+        {
+            if (InputPrefersUnclippedHostBounds(primitive.Inputs[index], namedResults, previousNeedsStableBounds, isFirst && index == 0))
             {
                 return true;
             }
@@ -168,10 +273,63 @@ internal static class FilterEffectBuilder
         };
     }
 
+    private static bool InputPrefersUnclippedHostBounds(
+        FilterInput input,
+        Dictionary<string, bool> namedResults,
+        bool previousNeedsStableBounds,
+        bool isFirst)
+    {
+        return input.Kind switch
+        {
+            FilterInputKind.PreviousResult => !isFirst && previousNeedsStableBounds,
+            FilterInputKind.NamedResult => !string.IsNullOrWhiteSpace(input.ResultName) &&
+                                           namedResults.TryGetValue(input.ResultName!, out var prefersUnclippedHostBounds) &&
+                                           prefersUnclippedHostBounds,
+            _ => false
+        };
+    }
+
+    private static bool PrimitiveUsesNamedResults(FilterPrimitive primitive)
+    {
+        return primitive switch
+        {
+            BlendPrimitive blend => InputUsesNamedResult(blend.Input) || InputUsesNamedResult(blend.Input2),
+            ColorMatrixPrimitive colorMatrix => InputUsesNamedResult(colorMatrix.Input),
+            ComponentTransferPrimitive componentTransfer => InputUsesNamedResult(componentTransfer.Input),
+            CompositePrimitive composite => InputUsesNamedResult(composite.Input) || InputUsesNamedResult(composite.Input2),
+            ConvolveMatrixPrimitive convolve => InputUsesNamedResult(convolve.Input),
+            DiffuseLightingPrimitive diffuse => InputUsesNamedResult(diffuse.Input),
+            DisplacementMapPrimitive displacement => InputUsesNamedResult(displacement.Input) || InputUsesNamedResult(displacement.Input2),
+            GaussianBlurPrimitive blur => InputUsesNamedResult(blur.Input),
+            MergePrimitive merge => MergeUsesNamedResults(merge),
+            MorphologyPrimitive morphology => InputUsesNamedResult(morphology.Input),
+            OffsetPrimitive offset => InputUsesNamedResult(offset.Input),
+            SpecularLightingPrimitive specular => InputUsesNamedResult(specular.Input),
+            TilePrimitive tile => InputUsesNamedResult(tile.Input),
+            _ => false
+        };
+    }
+
+    private static bool MergeUsesNamedResults(MergePrimitive primitive)
+    {
+        for (var index = 0; index < primitive.Inputs.Count; index++)
+        {
+            if (InputUsesNamedResult(primitive.Inputs[index]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool InputUsesNamedResult(FilterInput input) =>
+        input.Kind == FilterInputKind.NamedResult && !string.IsNullOrWhiteSpace(input.ResultName);
+
     private static FilterResult? BuildPrimitive(
         FilterPrimitive primitive,
         SkiaEffectContext context,
-        Dictionary<string, FilterResult> results,
+        Dictionary<string, FilterResult>? results,
         FilterResult? lastResult,
         bool isFirst)
     {
@@ -370,7 +528,7 @@ internal static class FilterEffectBuilder
     private static FilterResult? ResolveInput(
         FilterInput input,
         SkiaEffectContext context,
-        Dictionary<string, FilterResult> results,
+        Dictionary<string, FilterResult>? results,
         FilterResult? lastResult,
         bool isFirst,
         FilterColorInterpolation targetColorSpace)
@@ -397,9 +555,9 @@ internal static class FilterEffectBuilder
         return ApplyColorInterpolation(resolved.Value, targetColorSpace);
     }
 
-    private static FilterResult? ResolveNamedResult(string? resultName, Dictionary<string, FilterResult> results)
+    private static FilterResult? ResolveNamedResult(string? resultName, Dictionary<string, FilterResult>? results)
     {
-        if (string.IsNullOrWhiteSpace(resultName))
+        if (results is null || string.IsNullOrWhiteSpace(resultName))
         {
             return null;
         }
@@ -913,11 +1071,9 @@ internal static class FilterEffectBuilder
             return null;
         }
 
-        var colorFilter = SKColorFilter.CreateBlendMode(
-            ToSKColor(primitive.Color, context, primitive.Opacity),
-            SKBlendMode.Src);
-        var filter = CreateColorFilter(colorFilter, input: null, cropRect);
-        return filter is null ? null : AttachDependencies(filter, colorFilter);
+        var shader = SKShader.CreateColor(ToSKColor(primitive.Color, context, primitive.Opacity));
+        var filter = CreateShader(shader, dither: false, cropRect);
+        return filter is null ? null : AttachDependencies(filter, shader);
     }
 
     private static SKImageFilter? CreateImage(ImagePrimitive primitive, SkiaEffectContext context)
@@ -939,7 +1095,7 @@ internal static class FilterEffectBuilder
     private static SKImageFilter? CreateMerge(
         MergePrimitive primitive,
         SkiaEffectContext context,
-        Dictionary<string, FilterResult> results,
+        Dictionary<string, FilterResult>? results,
         FilterResult? lastResult,
         bool isFirst)
     {
@@ -1013,13 +1169,14 @@ internal static class FilterEffectBuilder
             return null;
         }
 
-        if (!cropRect.HasValue)
+        var localCropRect = ToLocalGeneratedSourceRect(primitive.CropRect, context);
+        if (!cropRect.HasValue || !localCropRect.HasValue)
         {
             return null;
         }
 
-        var tileSize = GetTurbulenceTileSize(primitive, cropRect.Value);
-        var shader = primitive.Type == FilterTurbulenceType.Turbulence
+        var tileSize = GetTurbulenceTileSize(primitive, localCropRect.Value);
+        var baseShader = primitive.Type == FilterTurbulenceType.Turbulence
             ? SKShader.CreatePerlinNoiseTurbulence(
                 ScaleFrequencyX(primitive.BaseFrequencyX, context),
                 ScaleFrequencyY(primitive.BaseFrequencyY, context),
@@ -1033,8 +1190,22 @@ internal static class FilterEffectBuilder
                 (float)primitive.Seed,
                 tileSize);
 
-        var filter = CreateShader(shader, dither: false, cropRect);
-        return filter is null ? null : AttachDependencies(filter, shader);
+        var filter = CreateShader(baseShader, dither: false, localCropRect);
+        if (filter is null)
+        {
+            return null;
+        }
+
+        if (cropRect.Value.Left != localCropRect.Value.Left || cropRect.Value.Top != localCropRect.Value.Top)
+        {
+            filter = CreateOffset(
+                cropRect.Value.Left - localCropRect.Value.Left,
+                cropRect.Value.Top - localCropRect.Value.Top,
+                filter,
+                cropRect);
+        }
+
+        return filter is null ? null : AttachDependencies(filter, baseShader);
     }
 
     private static SKPointI GetTurbulenceTileSize(TurbulencePrimitive primitive, SKRect cropRect)
@@ -1436,17 +1607,51 @@ internal static class FilterEffectBuilder
 
     private static SKRect? ToGeneratedSourceRect(Rect? rect, SkiaEffectContext context)
     {
-        if (context.HasSceneBounds)
+        if (context.HasGeneratedSourceBounds)
         {
             if (rect.HasValue)
             {
-                return ToSKRect(OffsetRect(rect.Value, context.SceneBounds.Position), context);
+                return ToSKRect(OffsetRect(rect.Value, context.GeneratedSourceBounds.Position), context);
             }
 
-            return ToSKRect(context.SceneBounds);
+            if (context.HasInputBounds)
+            {
+                return SKRect.Create(
+                    ScaleX(context.GeneratedSourceBounds.X, context),
+                    ScaleY(context.GeneratedSourceBounds.Y, context),
+                    ScaleX(context.InputBounds.Width, context),
+                    ScaleY(context.InputBounds.Height, context));
+            }
+
+            return ToSKRect(context.GeneratedSourceBounds);
         }
 
-        return ToCropRectOrContext(rect, context);
+        if (rect.HasValue)
+        {
+            return ToSKRect(rect.Value, context);
+        }
+
+        if (context.HasInputBounds)
+        {
+            return ToSKRect(context.InputBounds);
+        }
+
+        return null;
+    }
+
+    private static SKRect? ToLocalGeneratedSourceRect(Rect? rect, SkiaEffectContext context)
+    {
+        if (rect.HasValue)
+        {
+            return ToSKRect(rect.Value, context);
+        }
+
+        if (context.HasInputBounds)
+        {
+            return ToSKRect(context.InputBounds);
+        }
+
+        return null;
     }
 
     private static Rect OffsetRect(Rect rect, Point offset) =>
