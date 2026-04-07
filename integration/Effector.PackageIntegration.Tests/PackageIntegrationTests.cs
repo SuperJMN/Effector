@@ -52,13 +52,7 @@ public sealed class PackageIntegrationTests
     [Fact]
     public void NuGetConsumedApp_RestoreGraph_Aligns_LinuxNativeAssets_With_SkiaSharp()
     {
-        var restoredPackageVersions = ReadRestoredPackageVersions(
-            Path.Combine(
-                GetPackageIntegrationTestsProjectDirectory(),
-                "..",
-                "Effector.PackageIntegration.App",
-                "obj",
-                "project.assets.json"));
+        var restoredPackageVersions = ReadRestoredPackageVersions(FindIntegrationAppAssetsFile());
 
         Assert.True(
             restoredPackageVersions.TryGetValue("SkiaSharp", out var skiaSharpVersion),
@@ -204,5 +198,20 @@ public sealed class PackageIntegrationTests
         var projectDirectory = Path.GetDirectoryName(sourceFilePath);
         Assert.False(string.IsNullOrWhiteSpace(projectDirectory));
         return projectDirectory!;
+    }
+
+    private static string FindIntegrationAppAssetsFile()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "Effector.PackageIntegration.App", "obj", "project.assets.json");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate Effector.PackageIntegration.App/obj/project.assets.json starting from '{AppContext.BaseDirectory}'.");
     }
 }

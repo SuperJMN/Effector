@@ -11,6 +11,7 @@
     <IncludeSymbols>false</IncludeSymbols>
     <SymbolPackageFormat></SymbolPackageFormat>
     <IsPackable>true</IsPackable>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)/obj/**/*</DefaultItemExcludes>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);Effector_AddBuildTaskPayloadToPackage</TargetsForTfmSpecificContentInPackage>
     <_EffectorSelfWeaverProjectPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Effector.SelfWeaver\Effector.SelfWeaver.csproj'))</_EffectorSelfWeaverProjectPath>

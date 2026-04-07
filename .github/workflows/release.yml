@@ -69,7 +69,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore Effector.slnx
@@ -93,7 +93,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore Effector.slnx
@@ -121,7 +121,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore Effector.slnx
@@ -157,7 +157,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore src/Effector/Effector.csproj
@@ -193,7 +193,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       - name: Publish packages
         run: |
