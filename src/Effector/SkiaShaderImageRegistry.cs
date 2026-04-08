@@ -92,18 +92,6 @@ public static class SkiaShaderImageRegistry
         return new SkiaShaderImageHandle(id);
     }
 
-    public static bool TryGetImage(SkiaShaderImageHandle handle, out SKImage? image)
-    {
-        if (handle.IsEmpty || !Images.TryGetValue(handle.Value, out var entry) || entry.IsReleased)
-        {
-            image = null;
-            return false;
-        }
-
-        image = entry.Image;
-        return true;
-    }
-
     public static bool TryAcquire(SkiaShaderImageHandle handle, out SkiaShaderImageLease? lease)
     {
         lease = null;

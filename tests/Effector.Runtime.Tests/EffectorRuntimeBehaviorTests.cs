@@ -134,13 +134,10 @@ public sealed class EffectorRuntimeBehaviorTests
             try
             {
                 Assert.False(handle.IsEmpty);
-                Assert.True(SkiaShaderImageRegistry.TryGetImage(handle, out var image));
-                Assert.NotNull(image);
-                Assert.Equal(12, image!.Width);
-                Assert.Equal(8, image.Height);
-
                 Assert.True(SkiaShaderImageRegistry.TryAcquire(handle, out lease));
                 Assert.NotNull(lease);
+                Assert.Equal(12, lease!.Image.Width);
+                Assert.Equal(8, lease.Image.Height);
                 AssertColorClose(GetPixel(lease!.Image, 6, 4), expectedColor, tolerance: 4);
             }
             finally
@@ -149,7 +146,7 @@ public sealed class EffectorRuntimeBehaviorTests
                 SkiaShaderImageRegistry.Release(handle);
             }
 
-            Assert.False(SkiaShaderImageRegistry.TryGetImage(handle, out _));
+            Assert.False(SkiaShaderImageRegistry.TryAcquire(handle, out _));
         });
     }
 
@@ -166,14 +163,13 @@ public sealed class EffectorRuntimeBehaviorTests
 
             SkiaShaderImageRegistry.Release(handle);
 
-            Assert.False(SkiaShaderImageRegistry.TryGetImage(handle, out _));
             Assert.False(SkiaShaderImageRegistry.TryAcquire(handle, out _));
             Assert.Equal(10, lease!.Image.Width);
             Assert.Equal(6, lease.Image.Height);
 
             lease.Dispose();
 
-            Assert.False(SkiaShaderImageRegistry.TryGetImage(handle, out _));
+            Assert.False(SkiaShaderImageRegistry.TryAcquire(handle, out _));
         });
     }
 
@@ -305,6 +301,98 @@ public sealed class EffectorRuntimeBehaviorTests
                 Assert.NotNull(nextHost);
                 Assert.NotNull(overlayHost);
                 Assert.Same(nextPage, currentHost!.Content);
+                Assert.Null(nextHost!.Content);
+                Assert.False(nextHost.IsVisible);
+                Assert.False(overlayHost!.IsVisible);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [Fact]
+    public void TransitionPresenter_Replacing_InFlight_Transition_Completes_PreviousAwaiter()
+    {
+        RunOnUiThread(async () =>
+        {
+            var presenter = new TransitionPresenter();
+            var window = new Window
+            {
+                Width = 960,
+                Height = 640,
+                Content = presenter
+            };
+
+            try
+            {
+                window.Show();
+                window.UpdateLayout();
+
+                var initialPage = new Border
+                {
+                    Width = 920,
+                    Height = 560,
+                    Background = Brushes.DarkSlateBlue,
+                    Child = new TextBlock { Text = "Initial", Foreground = Brushes.White }
+                };
+                var firstPage = new Border
+                {
+                    Width = 920,
+                    Height = 560,
+                    Background = Brushes.OrangeRed,
+                    Child = new TextBlock { Text = "First", Foreground = Brushes.White }
+                };
+                var replacementPage = new Border
+                {
+                    Width = 920,
+                    Height = 560,
+                    Background = Brushes.SeaGreen,
+                    Child = new TextBlock { Text = "Replacement", Foreground = Brushes.White }
+                };
+
+                presenter.SetInitialPage(initialPage);
+                window.UpdateLayout();
+
+                var descriptor = new CompizTransitionDescriptor(
+                    CompizTransitionKind.Dissolve,
+                    "test",
+                    "Test",
+                    TimeSpan.FromSeconds(5),
+                    Colors.White,
+                    "test");
+
+                var firstTask = presenter.TransitionToAsync(firstPage, descriptor, new Point(480, 320));
+
+                for (var attempt = 0; attempt < 20 && !ReadField<bool>(presenter, "_isTransitioning"); attempt++)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(
+                        () =>
+                        {
+                            window.UpdateLayout();
+                            presenter.UpdateLayout();
+                        },
+                        DispatcherPriority.Render);
+                    await Task.Delay(10);
+                }
+
+                Assert.True(ReadField<bool>(presenter, "_isTransitioning"));
+
+                await presenter.TransitionToAsync(replacementPage, descriptor, new Point(120, 96));
+
+                var completed = await Task.WhenAny(firstTask, Task.Delay(500));
+                Assert.Same(firstTask, completed);
+                await firstTask;
+
+                var currentHost = presenter.FindControl<ContentControl>("CurrentHost");
+                var nextHost = presenter.FindControl<ContentControl>("NextHost");
+                var overlayHost = presenter.FindControl<Border>("OverlayHost");
+
+                Assert.NotNull(currentHost);
+                Assert.NotNull(nextHost);
+                Assert.NotNull(overlayHost);
+                Assert.Same(replacementPage, currentHost!.Content);
                 Assert.Null(nextHost!.Content);
                 Assert.False(nextHost.IsVisible);
                 Assert.False(overlayHost!.IsVisible);
@@ -3217,6 +3305,13 @@ public sealed class EffectorRuntimeBehaviorTests
         var property = instance.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Assert.NotNull(property);
         return (T)property!.GetValue(instance)!;
+    }
+
+    private static T ReadField<T>(object instance, string fieldName)
+    {
+        var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (T)field!.GetValue(instance)!;
     }
 
     private static Rect GetStoredHostBounds(IEffect effect)

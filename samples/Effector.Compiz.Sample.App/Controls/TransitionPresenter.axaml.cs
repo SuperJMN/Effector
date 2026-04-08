@@ -71,7 +71,16 @@ public partial class TransitionPresenter : UserControl
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(descriptor);
 
-        if (_isTransitioning || _currentHost.Content is null)
+        if (_isTransitioning)
+        {
+            var priorTransitionCompletion = _transitionCompletion;
+            _transitionCompletion = null;
+            SetInitialPage(page);
+            priorTransitionCompletion?.TrySetResult(true);
+            return;
+        }
+
+        if (_currentHost.Content is null)
         {
             SetInitialPage(page);
             return;
