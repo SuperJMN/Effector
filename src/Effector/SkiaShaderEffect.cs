@@ -1,17 +1,21 @@
 using System;
+using System.Collections.Generic;
 using SkiaSharp;
 
 namespace Effector;
 
 public sealed class SkiaShaderEffect : IDisposable
 {
+    private readonly IDisposable[] _ownedResources;
+
     public SkiaShaderEffect(
         SKShader? shader,
         SKBlendMode blendMode = SKBlendMode.SrcOver,
         bool isAntialias = true,
         SKRect? destinationRect = null,
         SKMatrix? localMatrix = null,
-        Action<SKCanvas, SKImage, SKRect>? fallbackRenderer = null)
+        Action<SKCanvas, SKImage, SKRect>? fallbackRenderer = null,
+        IEnumerable<IDisposable>? ownedResources = null)
     {
         if (shader is null && fallbackRenderer is null)
         {
@@ -24,6 +28,9 @@ public sealed class SkiaShaderEffect : IDisposable
         DestinationRect = destinationRect;
         LocalMatrix = localMatrix;
         FallbackRenderer = fallbackRenderer;
+        _ownedResources = ownedResources is null
+            ? Array.Empty<IDisposable>()
+            : new List<IDisposable>(ownedResources).ToArray();
     }
 
     public SKShader? Shader { get; }
@@ -56,5 +63,10 @@ public sealed class SkiaShaderEffect : IDisposable
     public void Dispose()
     {
         Shader?.Dispose();
+
+        for (var index = _ownedResources.Length - 1; index >= 0; index--)
+        {
+            _ownedResources[index].Dispose();
+        }
     }
 }

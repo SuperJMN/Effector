@@ -191,6 +191,80 @@ public sealed class EffectorWeaverTests
     }
 
     [Fact]
+    public void Weaver_Allows_SkiaShaderImageHandle_Properties()
+    {
+        var assemblyPath = BuildTemporaryAssembly(
+            """
+            using Avalonia;
+            using Avalonia.Media;
+            using Effector;
+            using SkiaSharp;
+
+            namespace SampleEffects;
+
+            [SkiaEffect(typeof(SampleEffectFactory))]
+            public sealed class SampleEffect : SkiaEffectBase, IEffect
+            {
+                public static readonly StyledProperty<SkiaShaderImageHandle> FromImageProperty =
+                    AvaloniaProperty.Register<SampleEffect, SkiaShaderImageHandle>(nameof(FromImage));
+
+                public static readonly StyledProperty<SkiaShaderImageHandle> ToImageProperty =
+                    AvaloniaProperty.Register<SampleEffect, SkiaShaderImageHandle>(nameof(ToImage));
+
+                public static readonly StyledProperty<double> ProgressProperty =
+                    AvaloniaProperty.Register<SampleEffect, double>(nameof(Progress), 0d);
+
+                static SampleEffect()
+                {
+                    AffectsRender<SampleEffect>(FromImageProperty, ToImageProperty, ProgressProperty);
+                }
+
+                public SkiaShaderImageHandle FromImage
+                {
+                    get => GetValue(FromImageProperty);
+                    set => SetValue(FromImageProperty, value);
+                }
+
+                public SkiaShaderImageHandle ToImage
+                {
+                    get => GetValue(ToImageProperty);
+                    set => SetValue(ToImageProperty, value);
+                }
+
+                public double Progress
+                {
+                    get => GetValue(ProgressProperty);
+                    set => SetValue(ProgressProperty, value);
+                }
+            }
+
+            public sealed class SampleEffectFactory :
+                ISkiaEffectFactory<SampleEffect>,
+                ISkiaShaderEffectFactory<SampleEffect>,
+                ISkiaEffectValueFactory,
+                ISkiaShaderEffectValueFactory
+            {
+                public Thickness GetPadding(SampleEffect effect) => default;
+
+                public SKImageFilter? CreateFilter(SampleEffect effect, SkiaEffectContext context) => null;
+
+                public Thickness GetPadding(object[] values) => default;
+
+                public SKImageFilter? CreateFilter(object[] values, SkiaEffectContext context) => null;
+
+                public SkiaShaderEffect? CreateShaderEffect(SampleEffect effect, SkiaShaderEffectContext context) => null;
+
+                public SkiaShaderEffect? CreateShaderEffect(object[] values, SkiaShaderEffectContext context) => null;
+            }
+            """);
+
+        var output = RewriteTemporaryAssembly(assemblyPath);
+
+        Assert.Empty(output.Errors);
+        Assert.Equal(1, output.RewrittenEffectCount);
+    }
+
+    [Fact]
     public void AvaloniaBasePatcher_Rewrites_Target_Methods_And_Is_Idempotent()
     {
         var sourcePath = GetAvaloniaBasePath();

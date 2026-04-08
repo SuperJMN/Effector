@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Threading;
 using SkiaSharp;
@@ -31,7 +32,9 @@ public static class SkiaRuntimeShaderBuilder
         bool isAntialias = true,
         SKRect? destinationRect = null,
         SKMatrix? localMatrix = null,
-        Action<SKCanvas, SKImage, SKRect>? fallbackRenderer = null)
+        Action<SKCanvas, SKImage, SKRect>? fallbackRenderer = null,
+        Action<SKRuntimeEffectChildren, SkiaShaderEffectContext, ICollection<IDisposable>>? configureOwnedChildren = null,
+        IEnumerable<IDisposable>? ownedResources = null)
         => CreateCore(
             sksl,
             context,
@@ -44,6 +47,8 @@ public static class SkiaRuntimeShaderBuilder
             destinationRect,
             localMatrix,
             fallbackRenderer,
+            configureOwnedChildren,
+            ownedResources,
             EffectorRuntime.DirectRuntimeShadersEnabled);
 
     internal static SkiaShaderEffect CreateCore(
@@ -58,7 +63,9 @@ public static class SkiaRuntimeShaderBuilder
         SKRect? destinationRect,
         SKMatrix? localMatrix,
         Action<SKCanvas, SKImage, SKRect>? fallbackRenderer,
-        bool directRuntimeShadersEnabled)
+        Action<SKRuntimeEffectChildren, SkiaShaderEffectContext, ICollection<IDisposable>>? configureOwnedChildren = null,
+        IEnumerable<IDisposable>? ownedResources = null,
+        bool directRuntimeShadersEnabled = true)
     {
         if (string.IsNullOrWhiteSpace(sksl))
         {
@@ -67,11 +74,21 @@ public static class SkiaRuntimeShaderBuilder
 
         var resolvedDestinationRect = destinationRect ?? context.EffectBounds;
         var resolvedLocalMatrix = localMatrix ?? SKMatrix.CreateTranslation(-resolvedDestinationRect.Left, -resolvedDestinationRect.Top);
+        var baseOwnedResources = ownedResources is null ? null : new List<IDisposable>(ownedResources);
 
         if (!directRuntimeShadersEnabled && fallbackRenderer is not null)
         {
-            return new SkiaShaderEffect(null, blendMode, isAntialias, resolvedDestinationRect, resolvedLocalMatrix, fallbackRenderer);
+            return new SkiaShaderEffect(
+                null,
+                blendMode,
+                isAntialias,
+                resolvedDestinationRect,
+                resolvedLocalMatrix,
+                fallbackRenderer,
+                baseOwnedResources);
         }
+
+        List<IDisposable>? transientOwnedResources = null;
 
         try
         {
@@ -80,8 +97,15 @@ public static class SkiaRuntimeShaderBuilder
             configureUniforms?.Invoke(uniforms);
 
             var children = new SKRuntimeEffectChildren(effect);
-            using var contentShader = BindContentShader(contentChildName, children, context);
+            transientOwnedResources = new List<IDisposable>();
+            var contentShader = BindContentShader(contentChildName, children, context);
+            if (contentShader is not null)
+            {
+                transientOwnedResources.Add(contentShader);
+            }
+
             configureChildren?.Invoke(children, context);
+            configureOwnedChildren?.Invoke(children, context, transientOwnedResources);
 
             var shader = effect.ToShader(uniforms, children, resolvedLocalMatrix);
 
@@ -90,11 +114,32 @@ public static class SkiaRuntimeShaderBuilder
                 throw new InvalidOperationException("Runtime shader compilation succeeded, but the shader could not be materialized.");
             }
 
-            return new SkiaShaderEffect(shader, blendMode, isAntialias, resolvedDestinationRect, resolvedLocalMatrix, fallbackRenderer);
+            return new SkiaShaderEffect(
+                shader,
+                blendMode,
+                isAntialias,
+                resolvedDestinationRect,
+                resolvedLocalMatrix,
+                fallbackRenderer,
+                CombineOwnedResources(baseOwnedResources, transientOwnedResources));
         }
         catch when (fallbackRenderer is not null)
         {
-            return new SkiaShaderEffect(null, blendMode, isAntialias, resolvedDestinationRect, resolvedLocalMatrix, fallbackRenderer);
+            DisposeOwnedResources(transientOwnedResources);
+            return new SkiaShaderEffect(
+                null,
+                blendMode,
+                isAntialias,
+                resolvedDestinationRect,
+                resolvedLocalMatrix,
+                fallbackRenderer,
+                baseOwnedResources);
+        }
+        catch
+        {
+            DisposeOwnedResources(transientOwnedResources);
+            DisposeOwnedResources(baseOwnedResources);
+            throw;
         }
     }
 
@@ -137,5 +182,43 @@ public static class SkiaRuntimeShaderBuilder
         var shader = context.CreateContentShader();
         children.Add(contentChildName, shader);
         return shader;
+    }
+
+    private static IReadOnlyList<IDisposable>? CombineOwnedResources(
+        IReadOnlyCollection<IDisposable>? baseOwnedResources,
+        IReadOnlyCollection<IDisposable>? transientOwnedResources)
+    {
+        var baseCount = baseOwnedResources?.Count ?? 0;
+        var transientCount = transientOwnedResources?.Count ?? 0;
+        if (baseCount == 0 && transientCount == 0)
+        {
+            return null;
+        }
+
+        var combined = new List<IDisposable>(baseCount + transientCount);
+        if (baseOwnedResources is not null)
+        {
+            combined.AddRange(baseOwnedResources);
+        }
+
+        if (transientOwnedResources is not null)
+        {
+            combined.AddRange(transientOwnedResources);
+        }
+
+        return combined;
+    }
+
+    private static void DisposeOwnedResources(IReadOnlyList<IDisposable>? ownedResources)
+    {
+        if (ownedResources is null)
+        {
+            return;
+        }
+
+        for (var index = ownedResources.Count - 1; index >= 0; index--)
+        {
+            ownedResources[index].Dispose();
+        }
     }
 }
