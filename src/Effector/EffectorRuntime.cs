@@ -1778,6 +1778,7 @@ public static class EffectorRuntime
             if (snapshot is null)
             {
                 TraceShaderPhase(frame.Effect, "end:snapshot-null");
+                frame.Dispose();
                 return false;
             }
             try
