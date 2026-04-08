@@ -74,7 +74,6 @@ public partial class MainWindow : Window
         Title = "Effector Gallery";
         Background = Brushes.White;
         ExtendClientAreaToDecorationsHint = false;
-        ExtendClientAreaChromeHints = ExtendClientAreaChromeHints.Default;
         TransparencyLevelHint = new[] { WindowTransparencyLevel.None };
         BuildHeadlessSafeShell();
     }
@@ -201,7 +200,7 @@ public partial class MainWindow : Window
     {
         var target = this.GetVisualDescendants()
             .OfType<Grid>()
-            .FirstOrDefault(static grid => grid.Effect is ScanlineShaderEffect or GridShaderEffect or SpotlightShaderEffect);
+            .FirstOrDefault(static grid => grid.Effect?.GetType().Name is nameof(ScanlineShaderEffect) or nameof(GridShaderEffect) or nameof(SpotlightShaderEffect));
         target?.BringIntoView();
     }
 
@@ -971,7 +970,7 @@ public partial class MainWindow : Window
         return container;
     }
 
-    private Border CreatePreviewTile(string sectionName, string title, IEffect? effect, Func<IEffect?, Control>? buildPreviewContent = null)
+    private Border CreatePreviewTile(string sectionName, string title, SkiaEffectBase? effect, Func<SkiaEffectBase?, Control>? buildPreviewContent = null)
     {
         var outer = new Border
         {
@@ -1002,7 +1001,7 @@ public partial class MainWindow : Window
         return outer;
     }
 
-    private Control CreateDefaultPreviewContent(IEffect? effect)
+    private Control CreateDefaultPreviewContent(SkiaEffectBase? effect)
     {
         var preview = new Grid
         {
@@ -1021,9 +1020,9 @@ public partial class MainWindow : Window
         preview.Children.Add(BuildUiPanel().WithColumn(1));
         preview.RowDefinitions = new RowDefinitions("Auto");
 
-        if (effect is not null)
+        if (effect is IEffect avaloniaEffect)
         {
-            preview.Effect = effect;
+            preview.Effect = avaloniaEffect;
         }
 
         return preview;
@@ -1125,7 +1124,7 @@ public partial class MainWindow : Window
         return root;
     }
 
-    private Control BuildBurningButtonPreview(IEffect? effect)
+    private Control BuildBurningButtonPreview(SkiaEffectBase? effect)
     {
         var root = new Grid
         {
@@ -1166,7 +1165,6 @@ public partial class MainWindow : Window
             BorderBrush = new SolidColorBrush(Color.Parse("#364148")),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(18),
-            Effect = effect,
             Content = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
@@ -1209,6 +1207,11 @@ public partial class MainWindow : Window
                 }
             }
         };
+
+        if (effect is IEffect avaloniaEffect)
+        {
+            button.Effect = avaloniaEffect;
+        }
 
         root.Children.Add(new Border
         {
@@ -1439,10 +1442,10 @@ public partial class MainWindow : Window
         public EffectSectionDefinition(
             string name,
             string description,
-            IEffect effect,
+            SkiaEffectBase effect,
             string xamlExample,
             Action<Panel> buildControls,
-            Func<IEffect?, Control>? buildPreviewContent = null)
+            Func<SkiaEffectBase?, Control>? buildPreviewContent = null)
         {
             Name = name;
             Description = description;
@@ -1456,13 +1459,13 @@ public partial class MainWindow : Window
 
         public string Description { get; }
 
-        public IEffect Effect { get; }
+        public SkiaEffectBase Effect { get; }
 
         public string XamlExample { get; }
 
         public Action<Panel> BuildControls { get; }
 
-        public Func<IEffect?, Control>? BuildPreviewContent { get; }
+        public Func<SkiaEffectBase?, Control>? BuildPreviewContent { get; }
     }
 
     private static double GetRelativeLuminance(Color color)

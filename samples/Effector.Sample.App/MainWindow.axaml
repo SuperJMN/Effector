@@ -13,7 +13,6 @@
         Title="Effector Gallery"
         FontFamily="avares://Avalonia.Fonts.Inter#Inter"
         ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaChromeHints="PreferSystemChrome"
         TransparencyLevelHint="AcrylicBlur"
         mc:Ignorable="d">
   <Window.Background>
@@ -174,27 +173,28 @@
                 BorderBrush="#22003845"
                 BorderThickness="1">
           <StackPanel Spacing="14">
-            <TextBlock Text="Inline XAML Object Element"
+            <TextBlock Text="XAML Resource Effect"
                        FontSize="22"
                        FontWeight="SemiBold"
                        Foreground="#1E2A2D" />
-            <TextBlock Text="This card declares a custom PixelateEffect directly in XAML using the same Visual.Effect property you already use for built-in Avalonia effects."
+            <TextBlock Text="This card declares a custom PixelateEffect in XAML resources and applies it through the same Visual.Effect property you already use for built-in Avalonia effects."
                        Foreground="#55666B"
                        TextWrapping="Wrap" />
             <Border CornerRadius="20"
                     Padding="18"
-                    Background="#FFF4FBFE">
-              <Border.Effect>
-                <effects:PixelateEffect CellSize="12" />
-              </Border.Effect>
+                    Background="#FFF4FBFE"
+                    Effect="{StaticResource InlinePixelateEffect}">
+              <Border.Resources>
+                <effects:PixelateEffect x:Key="InlinePixelateEffect" CellSize="12" />
+              </Border.Resources>
               <Grid RowDefinitions="Auto,Auto,Auto"
                     RowSpacing="12">
-                <TextBlock Text="Inline XAML effect"
+                <TextBlock Text="Resource-backed XAML effect"
                            FontSize="22"
                            FontWeight="SemiBold"
                            Foreground="#243033" />
                 <TextBlock Grid.Row="1"
-                           Text="Object-element usage stays natural after weaving, which means the custom effect authoring model looks like normal Avalonia XAML."
+                           Text="Object-element usage still stays in XAML, while the effect instance is resolved through StaticResource before it flows into Visual.Effect."
                            Foreground="#55666B"
                            TextWrapping="Wrap" />
                 <StackPanel Grid.Row="2"
@@ -207,8 +207,8 @@
                   </Border>
                   <Border Padding="10,4"
                           CornerRadius="999"
-                          Background="#260071C2">
-                    <TextBlock Text="pixelate" Foreground="#0071C2" />
+                          Background="#26007C70">
+                    <TextBlock Text="static resource" Foreground="#007C70" />
                   </Border>
                 </StackPanel>
               </Grid>
