@@ -28,8 +28,9 @@ public static class SkiaShaderImageRegistry
 
         public bool IsReleased => Volatile.Read(ref _released) != 0;
 
-        public bool TryAcquireLease()
+        public bool TryAcquireLease(out bool removeReleasedEntry)
         {
+            removeReleasedEntry = false;
             if (IsReleased)
             {
                 return false;
@@ -41,7 +42,7 @@ public static class SkiaShaderImageRegistry
                 return true;
             }
 
-            ReleaseLease();
+            removeReleasedEntry = ReleaseLease();
             return false;
         }
 
@@ -106,8 +107,14 @@ public static class SkiaShaderImageRegistry
     public static bool TryAcquire(SkiaShaderImageHandle handle, out SkiaShaderImageLease? lease)
     {
         lease = null;
-        if (handle.IsEmpty || !Images.TryGetValue(handle.Value, out var entry) || !entry.TryAcquireLease())
+        if (handle.IsEmpty || !Images.TryGetValue(handle.Value, out var entry))
         {
+            return false;
+        }
+
+        if (!entry.TryAcquireLease(out var removeReleasedEntry))
+        {
+            DisposeReleasedEntry(handle.Value, removeReleasedEntry);
             return false;
         }
 
@@ -127,10 +134,7 @@ public static class SkiaShaderImageRegistry
             return;
         }
 
-        if (entry.ReleaseHandle() && Images.TryRemove(handle.Value, out entry))
-        {
-            entry.Dispose();
-        }
+        DisposeReleasedEntry(handle.Value, entry.ReleaseHandle());
     }
 
     internal static void ReleaseLease(long handleId)
@@ -140,7 +144,17 @@ public static class SkiaShaderImageRegistry
             return;
         }
 
-        if (entry.ReleaseLease() && Images.TryRemove(handleId, out entry))
+        DisposeReleasedEntry(handleId, entry.ReleaseLease());
+    }
+
+    private static void DisposeReleasedEntry(long handleId, bool shouldRemove)
+    {
+        if (!shouldRemove)
+        {
+            return;
+        }
+
+        if (Images.TryRemove(handleId, out var entry))
         {
             entry.Dispose();
         }

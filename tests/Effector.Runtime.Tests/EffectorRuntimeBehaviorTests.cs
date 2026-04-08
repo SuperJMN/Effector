@@ -317,6 +317,27 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void TryGetActiveShaderCanvas_Drains_DueDeferredRenderResources()
+    {
+        ForceDrainDeferredRenderResources();
+
+        var disposable = new TrackingDisposable();
+
+        try
+        {
+            ScheduleDeferredRenderResources(disposable);
+            Thread.Sleep(TimeSpan.FromMilliseconds(250));
+
+            Assert.False(EffectorRuntime.TryGetActiveShaderCanvas(new object(), out _));
+            Assert.True(disposable.IsDisposed);
+        }
+        finally
+        {
+            ForceDrainDeferredRenderResources();
+        }
+    }
+
+    [Fact]
     public void HostBounds_Updates_Propagate_From_Mutable_Effect_To_Frozen_Effect()
     {
         RunOnUiThread(() =>
@@ -1285,7 +1306,8 @@ public sealed class EffectorRuntimeBehaviorTests
         var shaderSource = field!.GetValue(null) as string;
         Assert.False(string.IsNullOrWhiteSpace(shaderSource));
 
-        using var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
+        // CompileShaderSource returns a cached SKRuntimeEffect instance.
+        var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
         Assert.NotNull(runtimeEffect);
         Assert.Contains("content", runtimeEffect.Children);
     }
@@ -1311,7 +1333,7 @@ public sealed class EffectorRuntimeBehaviorTests
             var shaderSource = field!.GetRawConstantValue() as string ?? field.GetValue(null) as string;
             Assert.False(string.IsNullOrWhiteSpace(shaderSource));
 
-            using var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
+            var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
             Assert.NotNull(runtimeEffect);
             Assert.Contains("fromImage", runtimeEffect.Children);
             Assert.Contains("toImage", runtimeEffect.Children);
@@ -3226,6 +3248,26 @@ public sealed class EffectorRuntimeBehaviorTests
         var maxX = Math.Max(Math.Max(topLeft.Value.X, topRight.Value.X), Math.Max(bottomLeft.Value.X, bottomRight.Value.X));
         var maxY = Math.Max(Math.Max(topLeft.Value.Y, topRight.Value.Y), Math.Max(bottomLeft.Value.Y, bottomRight.Value.Y));
         return new Rect(minX, minY, Math.Max(0d, maxX - minX), Math.Max(0d, maxY - minY));
+    }
+
+    private static void ScheduleDeferredRenderResources(IDisposable disposable)
+    {
+        var method = typeof(EffectorRuntime).GetMethod(
+            "ScheduleDeferredRenderResources",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        method!.Invoke(null, new object?[] { disposable, null });
+    }
+
+    private static void ForceDrainDeferredRenderResources()
+    {
+        var method = typeof(EffectorRuntime).GetMethod(
+            "DrainDeferredRenderResources",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        method!.Invoke(null, new object[] { true });
     }
 
     private static string GetScreenshotPath(string fileName)

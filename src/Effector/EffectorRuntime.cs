@@ -13,6 +13,7 @@ using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using SkiaSharp;
 
@@ -208,11 +209,6 @@ public static class EffectorRuntime
 
             s_initialized = true;
         }
-    }
-
-    static EffectorRuntime()
-    {
-        AppDomain.CurrentDomain.ProcessExit += static (_, _) => DrainDeferredRenderResources(force: true);
     }
 
     // Effector depends on SkiaSharp 3.x+, so direct runtime shaders should be
@@ -589,6 +585,8 @@ public static class EffectorRuntime
 
     public static bool TryGetActiveShaderCanvas(object drawingContext, out SKCanvas canvas)
     {
+        DrainDeferredRenderResources(force: false);
+
         lock (Sync)
         {
             if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
@@ -604,6 +602,8 @@ public static class EffectorRuntime
 
     public static bool TryGetActiveShaderSurface(object drawingContext, out SKSurface? surface)
     {
+        DrainDeferredRenderResources(force: false);
+
         lock (Sync)
         {
             if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
@@ -1870,7 +1870,9 @@ public static class EffectorRuntime
             {
                 if (deferRenderResourceDispose)
                 {
-                    ScheduleDeferredRenderResources(new DeferredRenderResourceBundle(shaderEffect, snapshot, frame));
+                    ScheduleDeferredRenderResources(
+                        new DeferredRenderResourceBundle(shaderEffect, snapshot, frame),
+                        GetDeferredRenderInvalidationTarget(frame.Effect));
                 }
                 else
                 {
@@ -2504,7 +2506,7 @@ public static class EffectorRuntime
         return frame.Surface.Snapshot();
     }
 
-    private static void ScheduleDeferredRenderResources(IDisposable disposable)
+    private static void ScheduleDeferredRenderResources(IDisposable disposable, Visual? invalidationTarget = null)
     {
         ArgumentNullException.ThrowIfNull(disposable);
 
@@ -2514,6 +2516,21 @@ public static class EffectorRuntime
                 new DeferredRenderResourceEntry(
                     disposable,
                     DateTime.UtcNow + DeferredRenderResourceDisposeDelay));
+        }
+
+        if (invalidationTarget is not null)
+        {
+            Dispatcher.UIThread.Post(
+                () => DispatcherTimer.RunOnce(
+                    () =>
+                    {
+                        if (TopLevel.GetTopLevel(invalidationTarget) is not null)
+                        {
+                            invalidationTarget.InvalidateVisual();
+                        }
+                    },
+                    DeferredRenderResourceDisposeDelay),
+                DispatcherPriority.Background);
         }
     }
 
@@ -2539,6 +2556,19 @@ public static class EffectorRuntime
                 ready[index].Dispose();
             }
         }
+    }
+
+    private static Visual? GetDeferredRenderInvalidationTarget(IEffect effect)
+    {
+        lock (Sync)
+        {
+            if (HostVisuals.TryGetValue(effect, out var holder))
+            {
+                return TopLevel.GetTopLevel(holder.Visual) as Visual ?? holder.Visual;
+            }
+        }
+
+        return null;
     }
 
     private static SKCanvas? GetCurrentCanvas(object drawingContext) =>
