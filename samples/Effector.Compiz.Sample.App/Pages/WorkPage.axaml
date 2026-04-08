@@ -1,0 +1,137 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Effector.Compiz.Sample.App.Pages.WorkPage">
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <Border Background="#FF111827"
+            Padding="48,42">
+      <Grid RowDefinitions="Auto,Auto,Auto"
+            RowSpacing="22">
+        <Border Width="116"
+                Height="4"
+                CornerRadius="999"
+                Background="#F59E0B" />
+
+        <StackPanel Grid.Row="1"
+                    Spacing="14"
+                    MaxWidth="760">
+          <TextBlock Text="Transition catalog"
+                     FontSize="46"
+                     FontWeight="SemiBold"
+                     Foreground="#F8FBFF" />
+          <TextBlock Text="Each option below is a dedicated Effector shader/fallback pair fed by two captured page images. Pick one in the title bar, then click another route to watch it run."
+                     FontSize="18"
+                     Foreground="#C0D1E8"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+
+        <WrapPanel Grid.Row="2"
+                   ItemWidth="300"
+                   Orientation="Horizontal"
+                   HorizontalAlignment="Stretch">
+          <Border Width="288"
+                  Margin="0,0,20,20"
+                  Padding="18"
+                  CornerRadius="24"
+                  Background="#141E33">
+            <StackPanel Spacing="10">
+              <Border Width="14" Height="14" Background="#8B5CF6" CornerRadius="999" />
+              <TextBlock Text="Dissolve"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="Layered noise carves the old page away while a warm edge rolls out from the click point."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Width="288"
+                  Margin="0,0,20,20"
+                  Padding="18"
+                  CornerRadius="24"
+                  Background="#141E33">
+            <StackPanel Spacing="10">
+              <Border Width="14" Height="14" Background="#F97316" CornerRadius="999" />
+              <TextBlock Text="Burn"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="Ember, char, and smoke layers create a fiery reveal before the destination page settles into view."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Width="288"
+                  Margin="0,0,20,20"
+                  Padding="18"
+                  CornerRadius="24"
+                  Background="#141E33">
+            <StackPanel Spacing="10">
+              <Border Width="14" Height="14" Background="#F59E0B" CornerRadius="999" />
+              <TextBlock Text="Cube"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="A directional turn darkens the outgoing face and brings the new face in from the opposite edge."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Width="288"
+                  Margin="0,0,20,20"
+                  Padding="18"
+                  CornerRadius="24"
+                  Background="#141E33">
+            <StackPanel Spacing="10">
+              <Border Width="14" Height="14" Background="#6366F1" CornerRadius="999" />
+              <TextBlock Text="Wobbly"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="A springy ripple distorts both pages while the reveal front chases the expanding ring."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Width="288"
+                  Margin="0,0,20,20"
+                  Padding="18"
+                  CornerRadius="24"
+                  Background="#141E33">
+            <StackPanel Spacing="10">
+              <Border Width="14" Height="14" Background="#10B981" CornerRadius="999" />
+              <TextBlock Text="Genie"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="The active page compresses toward the click target while the destination page fades up beneath it."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Width="288"
+                  Margin="0,0,20,20"
+                  Padding="18"
+                  CornerRadius="24"
+                  Background="#141E33">
+            <StackPanel Spacing="10">
+              <Border Width="14" Height="14" Background="#EC4899" CornerRadius="999" />
+              <TextBlock Text="Magnetic"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="Pixels pull toward a focus point with jitter and sparks before the destination page reassembles."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </WrapPanel>
+      </Grid>
+    </Border>
+  </ScrollViewer>
+</UserControl>

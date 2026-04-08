@@ -1,0 +1,103 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Effector.Compiz.Sample.App.Pages.ContactPage">
+  <Border Background="#FF0C1628"
+          Padding="48,42">
+    <Grid ColumnDefinitions="1.15*,0.85*"
+          ColumnSpacing="28">
+      <StackPanel Spacing="20">
+        <Border Width="116"
+                Height="4"
+                CornerRadius="999"
+                Background="#EC4899" />
+
+        <TextBlock Text="Interactive controls still work"
+                   FontSize="44"
+                   FontWeight="SemiBold"
+                   Foreground="#F8FBFF" />
+
+        <TextBlock Text="The contact page is here to prove the transition surface can sit on top of real Avalonia input controls, not just screenshots. Type, tab, focus, and then route away with another shader."
+                   FontSize="18"
+                   Foreground="#C0D1E8"
+                   TextWrapping="Wrap" />
+
+        <Border Padding="24"
+                CornerRadius="24"
+                Background="#141E33">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+                RowSpacing="14">
+            <StackPanel Spacing="6">
+              <TextBlock Text="Name"
+                         Foreground="#C9D9EC" />
+              <TextBox PlaceholderText="Your name" />
+            </StackPanel>
+
+            <StackPanel Grid.Row="1"
+                        Spacing="6">
+              <TextBlock Text="Email"
+                         Foreground="#C9D9EC" />
+              <TextBox PlaceholderText="you@example.com" />
+            </StackPanel>
+
+            <StackPanel Grid.Row="2"
+                        Spacing="6">
+              <TextBlock Text="Message"
+                         Foreground="#C9D9EC" />
+              <TextBox AcceptsReturn="True"
+                       TextWrapping="Wrap"
+                       Height="120"
+                       PlaceholderText="Tell us which transition feels the most like classic Compiz." />
+            </StackPanel>
+
+            <StackPanel Grid.Row="3"
+                        Orientation="Horizontal"
+                        Spacing="12">
+              <Button Tag="sample-submit"
+                      Padding="18,12"
+                      Background="#3348D597"
+                      Foreground="White"
+                      FontWeight="SemiBold"
+                      Content="Send sample message" />
+              <Button Tag="/"
+                      Padding="18,12"
+                      Background="#1EFFFFFF"
+                      Foreground="#E8F1FF"
+                      Content="Back home" />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </StackPanel>
+
+      <StackPanel Grid.Column="1"
+                  Spacing="16">
+        <Border Padding="22"
+                CornerRadius="24"
+                Background="#131D31">
+          <StackPanel Spacing="10">
+            <TextBlock Text="What to try"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#F7FBFF" />
+            <TextBlock Text="1. Pick Random in the title bar." Foreground="#A8BDD8" />
+            <TextBlock Text="2. Click a route from different sides of the window." Foreground="#A8BDD8" />
+            <TextBlock Text="3. Return here and keep interacting with the form." Foreground="#A8BDD8" />
+          </StackPanel>
+        </Border>
+
+        <Border Padding="22"
+                CornerRadius="24"
+                Background="#131D31">
+          <StackPanel Spacing="10">
+            <TextBlock Text="Transition host"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#F7FBFF" />
+            <TextBlock Text="During a route change, the current and next pages are captured to render targets, bound through image handles, and replaced by one Effector shader effect until the animation completes."
+                       Foreground="#A8BDD8"
+                       TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

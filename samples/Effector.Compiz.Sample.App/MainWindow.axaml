@@ -1,0 +1,102 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:Effector.Compiz.Sample.App.Controls"
+        x:Class="Effector.Compiz.Sample.App.MainWindow"
+        Width="1380"
+        Height="940"
+        MinWidth="980"
+        MinHeight="720"
+        Title="Effector Compiz Sample"
+        FontFamily="avares://Avalonia.Fonts.Inter#Inter"
+        ExtendClientAreaToDecorationsHint="True"
+        TransparencyLevelHint="AcrylicBlur">
+  <Grid RowDefinitions="Auto,*">
+    <Border Grid.Row="0"
+            Padding="24,18"
+            Background="#E40A1020"
+            BorderBrush="#26FFFFFF"
+            BorderThickness="0,0,0,1">
+      <Grid RowDefinitions="Auto,Auto"
+            RowSpacing="10">
+        <Grid ColumnDefinitions="Auto,*,Auto"
+              ColumnSpacing="18">
+          <Button x:Name="BrandButton"
+                  Tag="/"
+                  Padding="14,10"
+                  Background="#261A365D"
+                  Foreground="#F7FBFF"
+                  FontSize="18"
+                  FontWeight="SemiBold"
+                  Content="Effector Compiz" />
+
+          <StackPanel Grid.Column="1"
+                      Orientation="Horizontal"
+                      Spacing="10"
+                      VerticalAlignment="Center">
+            <Button x:Name="HomeNavButton"
+                    Tag="/"
+                    Padding="16,9"
+                    Background="Transparent"
+                    Foreground="#D9E7F9"
+                    Content="Home" />
+            <Button x:Name="AboutNavButton"
+                    Tag="/about"
+                    Padding="16,9"
+                    Background="Transparent"
+                    Foreground="#D9E7F9"
+                    Content="About" />
+            <Button x:Name="WorkNavButton"
+                    Tag="/work"
+                    Padding="16,9"
+                    Background="Transparent"
+                    Foreground="#D9E7F9"
+                    Content="Work" />
+            <Button x:Name="ContactNavButton"
+                    Tag="/contact"
+                    Padding="16,9"
+                    Background="Transparent"
+                    Foreground="#D9E7F9"
+                    Content="Contact" />
+          </StackPanel>
+
+          <StackPanel Grid.Column="2"
+                      Orientation="Horizontal"
+                      Spacing="12"
+                      VerticalAlignment="Center">
+            <Border Padding="12,8"
+                    Background="#1AFFFFFF"
+                    CornerRadius="999">
+              <TextBlock Text="Skia shader transitions"
+                         Foreground="#C5D9F2"
+                         FontSize="12"
+                         FontWeight="SemiBold" />
+            </Border>
+            <StackPanel Spacing="4"
+                        VerticalAlignment="Center">
+              <TextBlock Text="Effect"
+                         Foreground="#90A8C4"
+                         FontSize="12" />
+              <ComboBox x:Name="EffectPicker"
+                        Width="172" />
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+
+        <TextBlock x:Name="EffectSummaryText"
+                   Grid.Row="1"
+                   Foreground="#A6B6CD"
+                   TextWrapping="Wrap" />
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1"
+            Margin="18"
+            CornerRadius="28"
+            Background="#FF0D1424"
+            BorderBrush="#1FFFFFFF"
+            BorderThickness="1"
+            ClipToBounds="True">
+      <controls:TransitionPresenter x:Name="TransitionHost" />
+    </Border>
+  </Grid>
+</Window>
