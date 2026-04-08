@@ -13,6 +13,7 @@ using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using SkiaSharp;
 
@@ -21,6 +22,7 @@ namespace Effector;
 public static class EffectorRuntime
 {
     private const string SupportedAvaloniaVersion = "12.0.0";
+    private static readonly TimeSpan DeferredRenderResourceDisposeDelay = TimeSpan.FromMilliseconds(100);
     private static readonly Version? SkiaSharpAssemblyVersion = typeof(SKRuntimeEffect).Assembly.GetName().Version;
     private static readonly bool IsNativeAot = GetIsNativeAot();
     private static readonly bool? DirectRuntimeShadersOverride = ParseOptionalBooleanEnvironmentVariable("EFFECTOR_ENABLE_DIRECT_RUNTIME_SHADERS");
@@ -28,6 +30,7 @@ public static class EffectorRuntime
     private static readonly string? ShaderSnapshotDir = Environment.GetEnvironmentVariable("EFFECTOR_SHADER_SNAPSHOT_DIR");
 
     private static readonly object Sync = new();
+    private static readonly object DeferredRenderResourceSync = new();
     private static readonly Dictionary<Type, EffectorEffectDescriptor> Descriptors = new();
     private static readonly Dictionary<string, EffectorEffectDescriptor> DescriptorsByName = new(StringComparer.Ordinal);
     private static readonly Dictionary<object, Stack<EffectorShaderEffectFrame>> ShaderFrames = new();
@@ -42,6 +45,7 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, Queue<Rect>> RenderThreadEffectBoundsByType = new();
     private static readonly Dictionary<Type, Queue<object>> RenderThreadProxiesByType = new();
     private static readonly Dictionary<Type, Queue<object>> RenderThreadVisualsByType = new();
+    private static readonly Queue<DeferredRenderResourceEntry> DeferredRenderResources = new();
     [ThreadStatic] private static bool s_suppressShaderEffectsForVisualSnapshot;
     private static bool s_initialized;
     private static bool s_skiaPatched;
@@ -71,6 +75,37 @@ public static class EffectorRuntime
         }
 
         public Rect Bounds { get; set; }
+    }
+
+    private sealed class DeferredRenderResourceEntry
+    {
+        public DeferredRenderResourceEntry(IDisposable disposable, DateTime dueAtUtc)
+        {
+            Disposable = disposable;
+            DueAtUtc = dueAtUtc;
+        }
+
+        public IDisposable Disposable { get; }
+
+        public DateTime DueAtUtc { get; }
+    }
+
+    private sealed class DeferredRenderResourceBundle : IDisposable
+    {
+        private readonly IDisposable[] _resources;
+
+        public DeferredRenderResourceBundle(params IDisposable?[] resources)
+        {
+            _resources = resources.Where(static resource => resource is not null).Cast<IDisposable>().ToArray();
+        }
+
+        public void Dispose()
+        {
+            for (var index = 0; index < _resources.Length; index++)
+            {
+                _resources[index].Dispose();
+            }
+        }
     }
 
     private sealed class HostVisualHolder
@@ -550,6 +585,8 @@ public static class EffectorRuntime
 
     public static bool TryGetActiveShaderCanvas(object drawingContext, out SKCanvas canvas)
     {
+        DrainDeferredRenderResources(force: false);
+
         lock (Sync)
         {
             if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
@@ -565,6 +602,8 @@ public static class EffectorRuntime
 
     public static bool TryGetActiveShaderSurface(object drawingContext, out SKSurface? surface)
     {
+        DrainDeferredRenderResources(force: false);
+
         lock (Sync)
         {
             if (ShaderFrames.TryGetValue(drawingContext, out var stack) && stack.Count > 0)
@@ -1553,6 +1592,8 @@ public static class EffectorRuntime
 
     private static bool TryBeginShaderEffect(object drawingContext, Rect? effectClipRect, IEffect effect)
     {
+        DrainDeferredRenderResources(force: false);
+
         if (!TryGetDescriptor(effect.GetType(), out var descriptor) || descriptor?.CreateShaderEffect is null)
         {
             TraceShaderPhase(effect, "begin:not-shader");
@@ -1731,92 +1772,120 @@ public static class EffectorRuntime
             TraceShaderPhase(frame.Effect, "end:flush-surface");
             frame.Surface.Flush();
             TraceShaderPhase(frame.Effect, "end:snapshot");
-            using var snapshot = CreateShaderCaptureSnapshot(frame);
+            var snapshot = CreateShaderCaptureSnapshot(frame);
+            SkiaShaderEffect? shaderEffect = null;
+            var deferRenderResourceDispose = false;
             if (snapshot is null)
             {
                 TraceShaderPhase(frame.Effect, "end:snapshot-null");
+                frame.Dispose();
                 return false;
             }
-            TraceShaderPhase(frame.Effect, "end:snapshot-ok");
-            SaveShaderSnapshot(frame.Effect, snapshot);
-            var contentBounds = ResolveRenderedContentBounds(snapshot, frame.LocalEffectBounds);
-            var globalContentBounds = contentBounds.IsEmpty
-                ? frame.DeviceEffectBounds
-                : OffsetRect(contentBounds, frame.IntermediateSurfaceBounds.Left, frame.IntermediateSurfaceBounds.Top);
-            TraceShaderFrame(
-                frame.Effect,
-                frame.EffectBounds,
-                frame.DeviceEffectBounds,
-                frame.RawEffectRect,
-                frame.DeviceClipBounds,
-                frame.IntermediateSurfaceBounds,
-                contentBounds,
-                globalContentBounds,
-                frame.UsedRenderThreadBounds,
-                frame.TotalMatrix,
-                frame.UsesLocalDrawingCoordinates);
-            if (TryGetDescriptor(frame.Effect.GetType(), out var debugDescriptor) && debugDescriptor is not null)
-            {
-                StoreShaderDebugInfo(
-                    debugDescriptor,
-                    frame.Effect,
-                    new EffectorShaderDebugInfo(
-                        frame.EffectBounds,
-                        frame.DeviceClipBounds,
-                        frame.RawEffectRect,
-                        frame.TotalMatrix,
-                        frame.UsedRenderThreadBounds,
-                        frame.IntermediateSurfaceBounds));
-            }
-            var overlayContentBounds = contentBounds.IsEmpty ? frame.LocalEffectBounds : contentBounds;
-            var normalizedOverlayBounds = NormalizeRectToOrigin(overlayContentBounds);
-            var overlayDestinationBounds = OffsetRect(
-                normalizedOverlayBounds,
-                frame.IntermediateSurfaceBounds.Left + overlayContentBounds.Left,
-                frame.IntermediateSurfaceBounds.Top + overlayContentBounds.Top);
-            var shaderContext = new SkiaShaderEffectContext(
-                frame.EffectContext,
-                snapshot,
-                SKRect.Create(snapshot.Width, snapshot.Height),
-                normalizedOverlayBounds);
-
-            using var shaderEffect = TryCreateShaderEffect(frame.Effect, shaderContext, out var created)
-                ? created
-                : null;
-
-            var restoreCount = frame.PreviousCanvas.Save();
             try
             {
-                TraceShaderPhase(frame.Effect, "end:base-reset");
-                frame.PreviousCanvas.ResetMatrix();
-                frame.PreviousCanvas.ClipRect(frame.DeviceEffectBounds);
-                TraceShaderPhase(frame.Effect, "end:base-draw-image");
-                frame.PreviousCanvas.DrawImage(snapshot, frame.IntermediateSurfaceBounds.Left, frame.IntermediateSurfaceBounds.Top);
-
-                if (shaderEffect is not null)
+                TraceShaderPhase(frame.Effect, "end:snapshot-ok");
+                SaveShaderSnapshot(frame.Effect, snapshot);
+                var contentBounds = ResolveRenderedContentBounds(snapshot, frame.LocalEffectBounds);
+                var globalContentBounds = contentBounds.IsEmpty
+                    ? frame.DeviceEffectBounds
+                    : OffsetRect(contentBounds, frame.IntermediateSurfaceBounds.Left, frame.IntermediateSurfaceBounds.Top);
+                TraceShaderFrame(
+                    frame.Effect,
+                    frame.EffectBounds,
+                    frame.DeviceEffectBounds,
+                    frame.RawEffectRect,
+                    frame.DeviceClipBounds,
+                    frame.IntermediateSurfaceBounds,
+                    contentBounds,
+                    globalContentBounds,
+                    frame.UsedRenderThreadBounds,
+                    frame.TotalMatrix,
+                    frame.UsesLocalDrawingCoordinates);
+                if (TryGetDescriptor(frame.Effect.GetType(), out var debugDescriptor) && debugDescriptor is not null)
                 {
-                    TraceShaderPhase(frame.Effect, "end:overlay");
-                    DrawMaskedShaderOverlay(
-                        drawingContext,
-                        frame.PreviousCanvas,
-                        snapshot,
-                        shaderEffect,
-                        normalizedOverlayBounds,
-                        normalizedOverlayBounds,
-                        overlayDestinationBounds,
-                        new SKPoint(-overlayContentBounds.Left, -overlayContentBounds.Top));
-                    TraceShaderPhase(frame.Effect, "end:overlay-done");
+                    StoreShaderDebugInfo(
+                        debugDescriptor,
+                        frame.Effect,
+                        new EffectorShaderDebugInfo(
+                            frame.EffectBounds,
+                            frame.DeviceClipBounds,
+                            frame.RawEffectRect,
+                            frame.TotalMatrix,
+                            frame.UsedRenderThreadBounds,
+                            frame.IntermediateSurfaceBounds));
+                }
+                var overlayContentBounds = contentBounds.IsEmpty ? frame.LocalEffectBounds : contentBounds;
+                var normalizedOverlayBounds = NormalizeRectToOrigin(overlayContentBounds);
+                var overlayDestinationBounds = OffsetRect(
+                    normalizedOverlayBounds,
+                    frame.IntermediateSurfaceBounds.Left + overlayContentBounds.Left,
+                    frame.IntermediateSurfaceBounds.Top + overlayContentBounds.Top);
+                var shaderContext = new SkiaShaderEffectContext(
+                    frame.EffectContext,
+                    snapshot,
+                    SKRect.Create(snapshot.Width, snapshot.Height),
+                    normalizedOverlayBounds);
+
+                shaderEffect = TryCreateShaderEffect(frame.Effect, shaderContext, out var created)
+                    ? created
+                    : null;
+
+                var restoreCount = frame.PreviousCanvas.Save();
+                try
+                {
+                    TraceShaderPhase(frame.Effect, "end:base-reset");
+                    frame.PreviousCanvas.ResetMatrix();
+                    frame.PreviousCanvas.ClipRect(frame.DeviceEffectBounds);
+                    TraceShaderPhase(frame.Effect, "end:base-draw-image");
+                    frame.PreviousCanvas.DrawImage(snapshot, frame.IntermediateSurfaceBounds.Left, frame.IntermediateSurfaceBounds.Top);
+
+                    if (shaderEffect is not null)
+                    {
+                        TraceShaderPhase(frame.Effect, "end:overlay");
+                        var usedRuntimeShader = DrawMaskedShaderOverlay(
+                            drawingContext,
+                            frame.PreviousCanvas,
+                            snapshot,
+                            shaderEffect,
+                            normalizedOverlayBounds,
+                            normalizedOverlayBounds,
+                            overlayDestinationBounds,
+                            new SKPoint(-overlayContentBounds.Left, -overlayContentBounds.Top));
+                        if (usedRuntimeShader)
+                        {
+                            TraceShaderPhase(frame.Effect, "end:flush-output-canvas");
+                            frame.PreviousCanvas.Flush();
+                            frame.PreviousSurface?.Flush();
+                        }
+                        TraceShaderPhase(frame.Effect, "end:overlay-done");
+                    }
+
+                    deferRenderResourceDispose = true;
+                }
+                finally
+                {
+                    frame.PreviousCanvas.RestoreToCount(restoreCount);
                 }
             }
             finally
             {
-                frame.PreviousCanvas.RestoreToCount(restoreCount);
+                if (deferRenderResourceDispose)
+                {
+                    ScheduleDeferredRenderResources(
+                        new DeferredRenderResourceBundle(shaderEffect, snapshot, frame),
+                        GetDeferredRenderInvalidationTarget(frame.Effect));
+                }
+                else
+                {
+                    shaderEffect?.Dispose();
+                    snapshot.Dispose();
+                    frame.Dispose();
+                }
             }
-
         }
         finally
         {
-            frame.Dispose();
+            DrainDeferredRenderResources(force: false);
         }
 
         return true;
@@ -2438,6 +2507,71 @@ public static class EffectorRuntime
         return frame.Surface.Snapshot();
     }
 
+    private static void ScheduleDeferredRenderResources(IDisposable disposable, Visual? invalidationTarget = null)
+    {
+        ArgumentNullException.ThrowIfNull(disposable);
+
+        lock (DeferredRenderResourceSync)
+        {
+            DeferredRenderResources.Enqueue(
+                new DeferredRenderResourceEntry(
+                    disposable,
+                    DateTime.UtcNow + DeferredRenderResourceDisposeDelay));
+        }
+
+        if (invalidationTarget is not null)
+        {
+            Dispatcher.UIThread.Post(
+                () => DispatcherTimer.RunOnce(
+                    () =>
+                    {
+                        if (TopLevel.GetTopLevel(invalidationTarget) is not null)
+                        {
+                            invalidationTarget.InvalidateVisual();
+                        }
+                    },
+                    DeferredRenderResourceDisposeDelay),
+                DispatcherPriority.Background);
+        }
+    }
+
+    private static void DrainDeferredRenderResources(bool force)
+    {
+        List<IDisposable>? ready = null;
+
+        lock (DeferredRenderResourceSync)
+        {
+            var now = DateTime.UtcNow;
+            while (DeferredRenderResources.Count > 0 &&
+                   (force || DeferredRenderResources.Peek().DueAtUtc <= now))
+            {
+                ready ??= new List<IDisposable>();
+                ready.Add(DeferredRenderResources.Dequeue().Disposable);
+            }
+        }
+
+        if (ready is not null)
+        {
+            for (var index = 0; index < ready.Count; index++)
+            {
+                ready[index].Dispose();
+            }
+        }
+    }
+
+    private static Visual? GetDeferredRenderInvalidationTarget(IEffect effect)
+    {
+        lock (Sync)
+        {
+            if (HostVisuals.TryGetValue(effect, out var holder))
+            {
+                return TopLevel.GetTopLevel(holder.Visual) as Visual ?? holder.Visual;
+            }
+        }
+
+        return null;
+    }
+
     private static SKCanvas? GetCurrentCanvas(object drawingContext) =>
         s_skiaCanvasBackingField?.GetValue(drawingContext) as SKCanvas;
 
@@ -2545,7 +2679,7 @@ public static class EffectorRuntime
             : SKRect.Empty;
     }
 
-    private static void DrawMaskedShaderOverlay(
+    private static bool DrawMaskedShaderOverlay(
         object drawingContext,
         SKCanvas canvas,
         SKImage snapshot,
@@ -2559,9 +2693,10 @@ public static class EffectorRuntime
         destinationRect = Intersect(destinationRect, contentBounds);
         if (destinationRect.IsEmpty)
         {
-            return;
+            return false;
         }
 
+        var usedRuntimeShader = false;
         var restoreCount = canvas.Save();
         try
         {
@@ -2581,6 +2716,7 @@ public static class EffectorRuntime
                 // scratch surface can hang while scrolling large shader sections.
                 if (CanDrawRuntimeShader(drawingContext) && shaderEffect.Shader is not null)
                 {
+                    usedRuntimeShader = true;
                     using var paint = new SKPaint
                     {
                         Shader = shaderEffect.Shader,
@@ -2606,6 +2742,8 @@ public static class EffectorRuntime
         {
             canvas.RestoreToCount(restoreCount);
         }
+
+        return usedRuntimeShader;
     }
 
     private static SKRect NormalizeRectToOrigin(SKRect rect) =>

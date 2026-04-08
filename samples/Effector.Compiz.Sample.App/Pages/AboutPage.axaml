@@ -1,0 +1,82 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Effector.Compiz.Sample.App.Pages.AboutPage">
+  <Border Background="#FF0F172A"
+          Padding="48,42">
+    <Grid RowDefinitions="Auto,Auto,*"
+          RowSpacing="22">
+      <Border Width="116"
+              Height="4"
+              CornerRadius="999"
+              Background="#10B981" />
+
+      <TextBlock Grid.Row="1"
+                 Text="About the experiment"
+                 FontSize="46"
+                 FontWeight="SemiBold"
+                 Foreground="#F8FBFF" />
+
+      <Grid Grid.Row="2"
+            ColumnDefinitions="1.2*,0.8*"
+            ColumnSpacing="28">
+        <StackPanel Spacing="18">
+          <TextBlock Text="compiz-web proved that a route transition can feel like a composition effect instead of a page swap. This sample keeps that idea, but the rendering stack is Avalonia + Effector + SkiaSharp rather than HTML-in-Canvas + WebGL."
+                     FontSize="18"
+                     Foreground="#C0D1E8"
+                     TextWrapping="Wrap" />
+          <TextBlock Text="Each transition in this app runs as a real Effector shader effect. The presenter captures the current and next pages into bitmaps, registers them as shader inputs, and drives progress with the same eased timing model as the original web demo."
+                     Foreground="#A6BCD8"
+                     TextWrapping="Wrap" />
+          <TextBlock Text="Because the transition lives on the public effect API, it still benefits from Effector's immutable snapshot model, render-thread-safe factories, and CPU fallback rendering."
+                     Foreground="#A6BCD8"
+                     TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal"
+                      Spacing="12">
+            <Button Tag="/work"
+                    Padding="18,12"
+                    Background="#3348D597"
+                    Foreground="White"
+                    FontWeight="SemiBold"
+                    Content="See the transition catalog" />
+            <Button Tag="/contact"
+                    Padding="18,12"
+                    Background="#1EFFFFFF"
+                    Foreground="#E8F1FF"
+                    Content="Open the contact form" />
+          </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Column="1"
+                    Spacing="16">
+          <Border Padding="18"
+                  CornerRadius="24"
+                  Background="#131D31">
+            <StackPanel Spacing="8">
+              <TextBlock Text="Effector"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="Single-effect Avalonia visuals, immutable render snapshots, runtime SKSL, and build-time weaving."
+                         Foreground="#A8BDD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Padding="18"
+                  CornerRadius="24"
+                  Background="#131D31">
+            <StackPanel Spacing="8">
+              <TextBlock Text="Transition surface"
+                         FontSize="22"
+                         FontWeight="SemiBold"
+                         Foreground="#F7FBFF" />
+              <TextBlock Text="An Avalonia user control captures page content, feeds two image handles into one shader effect, and swaps the live page when the animation completes."
+                         Foreground="#A8BDD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Grid>
+    </Grid>
+  </Border>
+</UserControl>

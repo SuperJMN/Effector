@@ -1,0 +1,98 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Effector.Compiz.Sample.App.Pages.HomePage">
+  <Border Background="#FF0D1424"
+          Padding="48,42">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto"
+          RowSpacing="22">
+      <Border Width="116"
+              Height="4"
+              CornerRadius="999"
+              Background="#8B5CF6" />
+
+      <TextBlock Grid.Row="1"
+                 Text="Shader-driven page transitions&#x0a;for Avalonia and Effector"
+                 FontSize="48"
+                 FontWeight="SemiBold"
+                 Foreground="#F8FBFF" />
+
+      <StackPanel Grid.Row="2"
+                  Spacing="14"
+                  MaxWidth="760">
+        <TextBlock Text="This sample recreates the compiz-web idea on the desktop: each navigation captures the current and next page, feeds both bitmaps into an Effector shader effect, and composites the result with SkiaSharp."
+                   FontSize="18"
+                   Foreground="#C0D1E8"
+                   TextWrapping="Wrap" />
+        <TextBlock Text="Use the picker in the title bar to switch between dissolve, burn, cube, wobbly, genie, magnetic, or random mode. Click anywhere on a route button to steer the transition origin."
+                   Foreground="#9CB2CC"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Grid Grid.Row="3"
+            ColumnDefinitions="1.35*,0.95*"
+            ColumnSpacing="28">
+        <StackPanel Spacing="18">
+          <Border Padding="20"
+                  CornerRadius="24"
+                  Background="#141C2E">
+            <StackPanel Spacing="10">
+              <TextBlock Text="Built on Effector's public effect API"
+                         FontSize="24"
+                         FontWeight="SemiBold"
+                         Foreground="#F5FAFF" />
+              <TextBlock Text="The transition surface is still just a normal Avalonia visual with a single `Visual.Effect`. Extra shader inputs are supplied through render-safe image handles rather than a custom renderer."
+                         Foreground="#A6BCD8"
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <StackPanel Orientation="Horizontal"
+                      Spacing="12">
+            <Button Tag="/work"
+                    Padding="18,12"
+                    Background="#335B8CFF"
+                    Foreground="White"
+                    FontWeight="SemiBold"
+                    Content="Explore the effects" />
+            <Button Tag="/about"
+                    Padding="18,12"
+                    Background="#1EFFFFFF"
+                    Foreground="#E8F1FF"
+                    Content="How it works" />
+          </StackPanel>
+        </StackPanel>
+
+        <Border Grid.Column="1"
+                Padding="24"
+                CornerRadius="28"
+                Background="#12192A"
+                BorderBrush="#1FFFFFFF"
+                BorderThickness="1">
+          <StackPanel Spacing="14">
+            <TextBlock Text="What you get"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Foreground="#F6FBFF" />
+            <TextBlock Text="1. Page-to-page captures routed through Effector shaders"
+                       Foreground="#C7D6EA" />
+            <TextBlock Text="2. CPU fallback renderers for the same transition catalog"
+                       Foreground="#C7D6EA" />
+            <TextBlock Text="3. Click-position-aware origins and direction changes"
+                       Foreground="#C7D6EA" />
+            <TextBlock Text="4. Real Avalonia controls, forms, and layouts between transitions"
+                       Foreground="#C7D6EA" />
+          </StackPanel>
+        </Border>
+      </Grid>
+
+      <Border Grid.Row="4"
+              Padding="14,10"
+              Background="#12192A"
+              CornerRadius="999"
+              HorizontalAlignment="Left">
+        <TextBlock Text="Inspired by compiz-web, re-authored for Avalonia + Effector + SkiaSharp."
+                   Foreground="#9CB2CC" />
+      </Border>
+    </Grid>
+  </Border>
+</UserControl>

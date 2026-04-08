@@ -19,7 +19,7 @@ Effector brings extensible Skia-backed custom effects to Avalonia `12.0.0` while
 - Support typed Skia filter effects, runtime shader effects, and pointer-driven interactive effects.
 - Use build-time weaving and app-local Avalonia binary patching instead of runtime detours.
 - Work with animation, parsing, immutable snapshots, render-thread safety, and NativeAOT publish flows.
-- Ship a sample gallery with color, convolution, shader, interactive, and burn-away effect examples.
+- Ship a sample gallery with color, convolution, shader, interactive, burn-away, and compiz-style route transition examples.
 
 ## Compatibility
 
@@ -215,6 +215,34 @@ public sealed class ScanlineShaderEffectFactory :
     }
 }
 ```
+
+## Secondary Shader Images
+
+Multi-input shader effects can carry extra bitmap inputs through `SkiaShaderImageHandle`, `SkiaShaderImageRegistry`, and `SkiaShaderImageLease`. The handle is a value type, so it remains compatible with Effector's immutable snapshot model, while a lease keeps the underlying `SKImage` alive until the returned `SkiaShaderEffect` is disposed.
+
+```csharp
+public static readonly StyledProperty<SkiaShaderImageHandle> FromImageProperty =
+    AvaloniaProperty.Register<MyTransitionEffect, SkiaShaderImageHandle>(nameof(FromImage));
+
+using var fromBitmap = CapturePage(...);
+var fromHandle = SkiaShaderImageRegistry.Register(fromBitmap);
+
+if (SkiaShaderImageRegistry.TryAcquire(effect.FromImage, out var fromLease))
+{
+    return SkiaRuntimeShaderBuilder.Create(
+        sksl,
+        context,
+        configureOwnedChildren: (children, _, ownedResources) =>
+        {
+            var fromShader = fromLease.Image.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
+            children.Add("fromImage", fromShader);
+            ownedResources.Add(fromShader);
+        },
+        ownedResources: new IDisposable[] { fromLease });
+}
+```
+
+The new compiz sample uses this path to feed current-page and next-page captures into a single Effector shader effect for route transitions. It is an Avalonia/Effector port inspired by Max Leiter's `compiz-web` project: https://github.com/MaxLeiter/compiz-web
 
 ## Interactive Effects
 
