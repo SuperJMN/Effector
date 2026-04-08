@@ -9,6 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Effector\Effector.csproj"
                       AdditionalProperties="GeneratePackageOnBuild=false" />
+    <ProjectReference Include="..\..\samples\Effector.Compiz.Sample.App\Effector.Compiz.Sample.App.csproj" />
+    <ProjectReference Include="..\..\samples\Effector.Compiz.Sample.Effects\Effector.Compiz.Sample.Effects.csproj" />
     <ProjectReference Include="..\..\samples\Effector.Sample.App\Effector.Sample.App.csproj" />
     <ProjectReference Include="..\..\samples\Effector.Sample.Effects\Effector.Sample.Effects.csproj" />
     <PackageReference Include="Avalonia" />

@@ -13,7 +13,11 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Effector.Compiz.Sample.App.Controls;
+using Effector.Compiz.Sample.Effects;
 using Effector.Sample.App;
 using Effector.Sample.Effects;
 using SkiaSharp;
@@ -57,6 +61,16 @@ public sealed class EffectorRuntimeBehaviorTests
         }
     }
 
+    private sealed class TrackingDisposable : IDisposable
+    {
+        public bool IsDisposed { get; private set; }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+        }
+    }
+
     private sealed class FakeRuntimeShaderDrawingContext
     {
         public object GrContext = new();
@@ -70,6 +84,11 @@ public sealed class EffectorRuntimeBehaviorTests
     private static TResult RunOnUiThread<TResult>(Func<TResult> action)
     {
         return Session.Dispatch(action, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    private static void RunOnUiThread(Func<Task> action)
+    {
+        Session.Dispatch(action, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     [Fact]
@@ -99,6 +118,201 @@ public sealed class EffectorRuntimeBehaviorTests
             Assert.NotNull(immutable);
             Assert.NotSame(effect, immutable);
             Assert.Contains("__EffectorImmutable", immutable.GetType().Name, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void ShaderImageRegistry_RoundTrips_BitmapRegistrations()
+    {
+        RunOnUiThread(() =>
+        {
+            var expectedColor = new SKColor(36, 112, 224, 255);
+            using var bitmap = CreateSolidColorBitmap(12, 8, expectedColor);
+            var handle = SkiaShaderImageRegistry.Register(bitmap);
+            SkiaShaderImageLease? lease = null;
+
+            try
+            {
+                Assert.False(handle.IsEmpty);
+                Assert.True(SkiaShaderImageRegistry.TryGetImage(handle, out var image));
+                Assert.NotNull(image);
+                Assert.Equal(12, image!.Width);
+                Assert.Equal(8, image.Height);
+
+                Assert.True(SkiaShaderImageRegistry.TryAcquire(handle, out lease));
+                Assert.NotNull(lease);
+                AssertColorClose(GetPixel(lease!.Image, 6, 4), expectedColor, tolerance: 4);
+            }
+            finally
+            {
+                lease?.Dispose();
+                SkiaShaderImageRegistry.Release(handle);
+            }
+
+            Assert.False(SkiaShaderImageRegistry.TryGetImage(handle, out _));
+        });
+    }
+
+    [Fact]
+    public void ShaderImageRegistry_Leases_KeepImagesAlive_AfterHandleRelease()
+    {
+        RunOnUiThread(() =>
+        {
+            using var bitmap = CreateSolidColorBitmap(10, 6, new SKColor(180, 88, 24, 255));
+            var handle = SkiaShaderImageRegistry.Register(bitmap);
+
+            Assert.True(SkiaShaderImageRegistry.TryAcquire(handle, out var lease));
+            Assert.NotNull(lease);
+
+            SkiaShaderImageRegistry.Release(handle);
+
+            Assert.False(SkiaShaderImageRegistry.TryGetImage(handle, out _));
+            Assert.False(SkiaShaderImageRegistry.TryAcquire(handle, out _));
+            Assert.Equal(10, lease!.Image.Width);
+            Assert.Equal(6, lease.Image.Height);
+
+            lease.Dispose();
+
+            Assert.False(SkiaShaderImageRegistry.TryGetImage(handle, out _));
+        });
+    }
+
+    [Fact]
+    public void CompizCubeTransition_RendersVisibleContent_AtMidProgress()
+    {
+        if (!EffectorRuntime.DirectRuntimeShadersEnabled)
+        {
+            return;
+        }
+
+        RunOnUiThread(() =>
+        {
+            using var fromBitmap = CreateSolidColorBitmap(96, 64, new SKColor(46, 128, 234, 255));
+            using var toBitmap = CreateSolidColorBitmap(96, 64, new SKColor(246, 152, 54, 255));
+            var fromHandle = SkiaShaderImageRegistry.Register(fromBitmap);
+            var toHandle = SkiaShaderImageRegistry.Register(toBitmap);
+
+            try
+            {
+                using var snapshot = CreateOpaqueMaskSnapshot(96, 64);
+                var context = new SkiaShaderEffectContext(
+                    new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+                    snapshot,
+                    new SKRect(0, 0, 96, 64),
+                    new SKRect(0, 0, 96, 64));
+
+                using var shaderEffect = new CompizTransitionEffectFactory().CreateShaderEffect(
+                    new object[]
+                    {
+                        CompizTransitionKind.Cube,
+                        fromHandle,
+                        toHandle,
+                        0.5d,
+                        0d,
+                        0.75d,
+                        0.5d
+                    },
+                    context);
+
+                Assert.NotNull(shaderEffect);
+                Assert.NotNull(shaderEffect!.Shader);
+
+                using var output = RenderShaderEffectComposite(snapshot, shaderEffect, useRuntimeShader: true);
+                var visibleSamples = 0;
+                for (var y = 8; y < 56; y += 8)
+                {
+                    for (var x = 8; x < 88; x += 8)
+                    {
+                        var pixel = output.GetPixel(x, y);
+                        if (pixel.Alpha > 32 && (pixel.Red > 16 || pixel.Green > 16 || pixel.Blue > 16))
+                        {
+                            visibleSamples++;
+                        }
+                    }
+                }
+
+                Assert.True(
+                    visibleSamples >= 8,
+                    $"Cube transition rendered too few visible samples at mid-progress ({visibleSamples}).");
+            }
+            finally
+            {
+                SkiaShaderImageRegistry.Release(fromHandle);
+                SkiaShaderImageRegistry.Release(toHandle);
+            }
+        });
+    }
+
+    [Fact]
+    public void TransitionPresenter_Promotes_PendingPage_WhenTransitionCompletes()
+    {
+        RunOnUiThread(async () =>
+        {
+            var presenter = new TransitionPresenter();
+            var window = new Window
+            {
+                Width = 960,
+                Height = 640,
+                Content = presenter
+            };
+
+            try
+            {
+                window.Show();
+                window.UpdateLayout();
+
+                var initialPage = new Border
+                {
+                    Width = 920,
+                    Height = 560,
+                    Background = Brushes.DarkSlateBlue,
+                    Child = new TextBlock { Text = "Initial", Foreground = Brushes.White }
+                };
+                var nextPage = new Border
+                {
+                    Width = 920,
+                    Height = 560,
+                    Background = Brushes.OrangeRed,
+                    Child = new TextBlock { Text = "Next", Foreground = Brushes.White }
+                };
+
+                presenter.SetInitialPage(initialPage);
+                window.UpdateLayout();
+
+                await Dispatcher.UIThread.InvokeAsync(
+                    () =>
+                    {
+                        window.UpdateLayout();
+                        presenter.UpdateLayout();
+                    },
+                    DispatcherPriority.Render);
+
+                var descriptor = new CompizTransitionDescriptor(
+                    CompizTransitionKind.Dissolve,
+                    "test",
+                    "Test",
+                    TimeSpan.FromMilliseconds(40),
+                    Colors.White,
+                    "test");
+
+                await presenter.TransitionToAsync(nextPage, descriptor, new Point(480, 320));
+
+                var currentHost = presenter.FindControl<ContentControl>("CurrentHost");
+                var nextHost = presenter.FindControl<ContentControl>("NextHost");
+                var overlayHost = presenter.FindControl<Border>("OverlayHost");
+
+                Assert.NotNull(currentHost);
+                Assert.NotNull(nextHost);
+                Assert.NotNull(overlayHost);
+                Assert.Same(nextPage, currentHost!.Content);
+                Assert.Null(nextHost!.Content);
+                Assert.False(nextHost.IsVisible);
+                Assert.False(overlayHost!.IsVisible);
+            }
+            finally
+            {
+                window.Close();
+            }
         });
     }
 
@@ -1030,6 +1244,39 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void ShaderBuilder_Disposes_OwnedResources_WithShaderEffect()
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(32, 24));
+        Assert.NotNull(surface);
+        using var snapshot = surface!.Snapshot();
+        var context = new SkiaShaderEffectContext(
+            new SkiaEffectContext(1d, usesOpacitySaveLayer: false),
+            snapshot,
+            new SKRect(0, 0, 32, 24),
+            new SKRect(0, 0, 32, 24));
+        var baseOwnedResource = new TrackingDisposable();
+        var childOwnedResource = new TrackingDisposable();
+
+        using (var shaderEffect = SkiaRuntimeShaderBuilder.Create(
+                   "half4 main(float2 coord) { return half4(1.0, 0.0, 0.0, 1.0); }",
+                   context,
+                   configureOwnedChildren: (_, _, ownedResources) =>
+                   {
+                       ownedResources.Add(childOwnedResource);
+                   },
+                   ownedResources: new IDisposable[] { baseOwnedResource }))
+        {
+            Assert.NotNull(shaderEffect);
+            Assert.NotNull(shaderEffect.Shader);
+            Assert.False(baseOwnedResource.IsDisposed);
+            Assert.False(childOwnedResource.IsDisposed);
+        }
+
+        Assert.True(baseOwnedResource.IsDisposed);
+        Assert.True(childOwnedResource.IsDisposed);
+    }
+
+    [Fact]
     public void BurningFlameShaderEffect_RuntimeShaderSource_Compiles_When_Validated()
     {
         var field = typeof(BurningFlameShaderEffectFactory).GetField("ShaderSource", BindingFlags.Static | BindingFlags.NonPublic);
@@ -1041,6 +1288,34 @@ public sealed class EffectorRuntimeBehaviorTests
         using var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
         Assert.NotNull(runtimeEffect);
         Assert.Contains("content", runtimeEffect.Children);
+    }
+
+    [Fact]
+    public void CompizTransitionShaders_Compile_When_Validated()
+    {
+        var sourceFieldNames = new[]
+        {
+            "DissolveShaderSource",
+            "BurnShaderSource",
+            "CubeShaderSource",
+            "WobblyShaderSource",
+            "GenieShaderSource",
+            "MagneticShaderSource"
+        };
+
+        foreach (var fieldName in sourceFieldNames)
+        {
+            var field = typeof(CompizTransitionEffectFactory).GetField(fieldName, BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(field);
+
+            var shaderSource = field!.GetRawConstantValue() as string ?? field.GetValue(null) as string;
+            Assert.False(string.IsNullOrWhiteSpace(shaderSource));
+
+            using var runtimeEffect = SkiaRuntimeShaderBuilder.CompileShaderSource(shaderSource!);
+            Assert.NotNull(runtimeEffect);
+            Assert.Contains("fromImage", runtimeEffect.Children);
+            Assert.Contains("toImage", runtimeEffect.Children);
+        }
     }
 
     [Fact]
@@ -2871,6 +3146,30 @@ public sealed class EffectorRuntimeBehaviorTests
         surface!.Canvas.Clear(SKColors.White);
         surface!.Canvas.Flush();
         return surface.Snapshot();
+    }
+
+    private static Bitmap CreateSolidColorBitmap(int width, int height, SKColor color)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(width, height));
+        Assert.NotNull(surface);
+
+        surface!.Canvas.Clear(color);
+        surface.Canvas.Flush();
+
+        using var data = surface.Snapshot().Encode(SKEncodedImageFormat.Png, 100);
+        Assert.NotNull(data);
+
+        using var stream = new MemoryStream();
+        data!.SaveTo(stream);
+        stream.Position = 0;
+        return new Bitmap(stream);
+    }
+
+    private static SKColor GetPixel(SKImage image, int x, int y)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(image.Width, image.Height));
+        Assert.True(image.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0));
+        return bitmap.GetPixel(x, y);
     }
 
     private static void AssertColorClose(SKColor actual, SKColor expected, int tolerance)
