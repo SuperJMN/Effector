@@ -426,6 +426,21 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void DeferredRenderResources_Do_Not_Depend_On_Host_Invalidation()
+    {
+        var scheduleMethod = typeof(EffectorRuntime).GetMethod(
+            "ScheduleDeferredRenderResources",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(scheduleMethod);
+        Assert.Single(scheduleMethod!.GetParameters());
+
+        var invalidationTargetMethod = typeof(EffectorRuntime).GetMethod(
+            "GetDeferredRenderInvalidationTarget",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.Null(invalidationTargetMethod);
+    }
+
+    [Fact]
     public void ShaderCaptureSnapshot_Remains_Usable_After_SourceSurface_Is_Disposed()
     {
         var expectedColor = new SKColor(64, 140, 226, 255);
@@ -3472,7 +3487,7 @@ public sealed class EffectorRuntimeBehaviorTests
             BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(method);
 
-        method!.Invoke(null, new object?[] { disposable, null });
+        method!.Invoke(null, new object[] { disposable });
     }
 
     private static void ForceDrainDeferredRenderResources()
