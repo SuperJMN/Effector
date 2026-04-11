@@ -1880,8 +1880,7 @@ public static class EffectorRuntime
                 {
                     deferredLayerOwner = frame.DetachLayerOwner();
                     ScheduleDeferredRenderResources(
-                        new DeferredRenderResourceBundle(shaderEffect, snapshot, deferredLayerOwner),
-                        GetDeferredRenderInvalidationTarget(frame.Effect));
+                        new DeferredRenderResourceBundle(shaderEffect, snapshot, deferredLayerOwner));
                 }
                 else
                 {
@@ -2516,7 +2515,7 @@ public static class EffectorRuntime
         return frame.Surface.Snapshot();
     }
 
-    private static void ScheduleDeferredRenderResources(IDisposable disposable, Visual? invalidationTarget = null)
+    private static void ScheduleDeferredRenderResources(IDisposable disposable)
     {
         ArgumentNullException.ThrowIfNull(disposable);
 
@@ -2528,20 +2527,22 @@ public static class EffectorRuntime
                     DateTime.UtcNow + DeferredRenderResourceDisposeDelay));
         }
 
-        if (invalidationTarget is not null)
+        // Dispose on the UI dispatcher after the grace period instead of invalidating the host
+        // visual. Invalidating here creates a self-sustaining redraw loop for otherwise static
+        // shader effects, which in turn keeps allocating capture surfaces and snapshots.
+        if (Dispatcher.UIThread.CheckAccess())
         {
-            Dispatcher.UIThread.Post(
-                () => DispatcherTimer.RunOnce(
-                    () =>
-                    {
-                        if (TopLevel.GetTopLevel(invalidationTarget) is not null)
-                        {
-                            invalidationTarget.InvalidateVisual();
-                        }
-                    },
-                    DeferredRenderResourceDisposeDelay),
-                DispatcherPriority.Background);
+            DispatcherTimer.RunOnce(
+                static () => DrainDeferredRenderResources(force: false),
+                DeferredRenderResourceDisposeDelay);
+            return;
         }
+
+        Dispatcher.UIThread.Post(
+            static () => DispatcherTimer.RunOnce(
+                static () => DrainDeferredRenderResources(force: false),
+                DeferredRenderResourceDisposeDelay),
+            DispatcherPriority.Background);
     }
 
     private static void DrainDeferredRenderResources(bool force)
@@ -2566,19 +2567,6 @@ public static class EffectorRuntime
                 ready[index].Dispose();
             }
         }
-    }
-
-    private static Visual? GetDeferredRenderInvalidationTarget(IEffect effect)
-    {
-        lock (Sync)
-        {
-            if (HostVisuals.TryGetValue(effect, out var holder))
-            {
-                return TopLevel.GetTopLevel(holder.Visual) as Visual ?? holder.Visual;
-            }
-        }
-
-        return null;
     }
 
     private static SKCanvas? GetCurrentCanvas(object drawingContext) =>
