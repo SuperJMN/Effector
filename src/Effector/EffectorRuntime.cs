@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -26,6 +27,7 @@ public static class EffectorRuntime
     private static readonly Version? SkiaSharpAssemblyVersion = typeof(SKRuntimeEffect).Assembly.GetName().Version;
     private static readonly bool IsNativeAot = GetIsNativeAot();
     private static readonly bool? DirectRuntimeShadersOverride = ParseOptionalBooleanEnvironmentVariable("EFFECTOR_ENABLE_DIRECT_RUNTIME_SHADERS");
+    private static readonly bool ForceRasterCapture = GetForceRasterCapture();
     private static readonly string? ShaderTracePath = Environment.GetEnvironmentVariable("EFFECTOR_SHADER_TRACE_PATH");
     private static readonly string? ShaderSnapshotDir = Environment.GetEnvironmentVariable("EFFECTOR_SHADER_SNAPSHOT_DIR");
 
@@ -196,6 +198,24 @@ public static class EffectorRuntime
 #else
         return false;
 #endif
+    }
+
+    // GPU-backed SKSurface objects created as intermediate shader capture layers can
+    // cause SIGSEGV when finalized on the GC thread because the GPU context is not
+    // active on that thread.  On Linux (X11/Vulkan/GL), this is reliably triggered by
+    // any runtime SkSL shader effect.  The raster capture path creates CPU-backed
+    // surfaces that are safe to finalize on any thread while the runtime shader itself
+    // still executes on the GPU-backed compositor canvas.  Override with
+    // EFFECTOR_FORCE_RASTER_CAPTURE=true|false.
+    private static bool GetForceRasterCapture()
+    {
+        var envOverride = ParseOptionalBooleanEnvironmentVariable("EFFECTOR_FORCE_RASTER_CAPTURE");
+        if (envOverride.HasValue)
+        {
+            return envOverride.Value;
+        }
+
+        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
     }
 
     public static void EnsureInitialized()
@@ -1912,7 +1932,7 @@ public static class EffectorRuntime
             throw new InvalidOperationException("Avalonia.Skia shader capture helpers have not been discovered.");
         }
 
-        if (s_skiaCreateLayerMethod is null)
+        if (s_skiaCreateLayerMethod is null || ForceRasterCapture)
         {
             return CreateRasterShaderCaptureContext(sourceDrawingContext, pixelSize);
         }
