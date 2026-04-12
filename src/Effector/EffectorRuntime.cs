@@ -37,6 +37,7 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, EffectorEffectDescriptor> Descriptors = new();
     private static readonly Dictionary<string, EffectorEffectDescriptor> DescriptorsByName = new(StringComparer.Ordinal);
     private static readonly Dictionary<object, Stack<EffectorShaderEffectFrame>> ShaderFrames = new();
+    private static readonly Dictionary<object, Stack<bool>> EffectKindStack = new();
     private static readonly Dictionary<Type, EffectorShaderDebugInfo> ShaderDebugInfoByType = new();
     private static readonly ConditionalWeakTable<object, HostVisualHolder> HostVisuals = new();
     private static readonly ConditionalWeakTable<IEffect, EffectBoundsHolder> HostVisualBounds = new();
@@ -593,7 +594,20 @@ public static class EffectorRuntime
         EnsureInitialized();
         EnsureSkiaMetadata(drawingContext);
         TraceShaderPhase(effect, "begin:patched");
-        return TryBeginShaderEffect(drawingContext, effectClipRect, effect);
+        var isShader = TryBeginShaderEffect(drawingContext, effectClipRect, effect);
+
+        lock (Sync)
+        {
+            if (!EffectKindStack.TryGetValue(drawingContext, out var kindStack))
+            {
+                kindStack = new Stack<bool>();
+                EffectKindStack[drawingContext] = kindStack;
+            }
+
+            kindStack.Push(isShader);
+        }
+
+        return isShader;
     }
 
     public static bool TryEndShaderEffectPatched(object drawingContext)
@@ -601,6 +615,32 @@ public static class EffectorRuntime
         EnsureInitialized();
         EnsureSkiaMetadata(drawingContext);
         TraceShaderGlobalPhase(drawingContext, "end:patched");
+
+        bool wasShader;
+
+        lock (Sync)
+        {
+            if (EffectKindStack.TryGetValue(drawingContext, out var kindStack) && kindStack.Count > 0)
+            {
+                wasShader = kindStack.Pop();
+                if (kindStack.Count == 0)
+                {
+                    EffectKindStack.Remove(drawingContext);
+                }
+            }
+            else
+            {
+                // No tracking entry — fall back to the original behaviour so
+                // standalone shader effects still work correctly.
+                wasShader = true;
+            }
+        }
+
+        if (!wasShader)
+        {
+            return false;
+        }
+
         return TryEndShaderEffect(drawingContext);
     }
 
