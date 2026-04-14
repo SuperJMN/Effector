@@ -1536,7 +1536,7 @@ public partial class MainWindow : Window
         return root;
     }
 
-    private static Border CreateNestedFilterShaderCard(string tag, string title, string subtitle, string accentHex, IEffect? effect)
+    private static Border CreateNestedFilterShaderCard(string tag, string title, string subtitle, string accentHex, SkiaEffectBase? effect)
     {
         var accentColor = Color.Parse(accentHex);
         var card = new Border
@@ -1596,9 +1596,9 @@ public partial class MainWindow : Window
             }
         };
 
-        if (effect is not null)
+        if (effect is IEffect avaloniaEffect)
         {
-            card.Effect = effect;
+            card.Effect = avaloniaEffect;
         }
 
         return card;
