@@ -23,7 +23,8 @@ namespace Effector;
 public static class EffectorRuntime
 {
     private const string SupportedAvaloniaVersion = "12.0.0";
-    private static readonly TimeSpan DeferredRenderResourceDisposeDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan DeferredRenderResourceDisposeDelay = TimeSpan.FromMilliseconds(32);
+    private const int MaxDeferredRenderResources = 4;
     private static readonly Version? SkiaSharpAssemblyVersion = typeof(SKRuntimeEffect).Assembly.GetName().Version;
     private static readonly bool IsNativeAot = GetIsNativeAot();
     private static readonly bool? DirectRuntimeShadersOverride = ParseOptionalBooleanEnvironmentVariable("EFFECTOR_ENABLE_DIRECT_RUNTIME_SHADERS");
@@ -49,6 +50,7 @@ public static class EffectorRuntime
     private static readonly Dictionary<Type, Queue<object>> RenderThreadVisualsByType = new();
     private static readonly Queue<DeferredRenderResourceEntry> DeferredRenderResources = new();
     [ThreadStatic] private static bool s_suppressShaderEffectsForVisualSnapshot;
+    private static GRContext? s_compositorGrContext;
     private static bool s_initialized;
     private static bool s_skiaPatched;
     private static Type? s_skiaDrawingContextType;
@@ -215,8 +217,14 @@ public static class EffectorRuntime
             return envOverride.Value;
         }
 
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
-            && !OperatingSystem.IsAndroid();
+        // Linux desktop: GPU-backed surfaces cause SIGSEGV when disposed on the
+        // finalizer thread while the compositor is active on the render thread.
+        // Android: GPU-backed capture surfaces accumulate ~1.4 MB/s of VRAM that
+        // the deferred disposal queue cannot drain fast enough, causing OOM kills
+        // within 60-90 seconds of continuous shader animation.
+        // Both platforms use CPU-backed raster surfaces for capture while the
+        // runtime shader still executes on the GPU-backed compositor canvas.
+        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
     }
 
     public static void EnsureInitialized()
@@ -1661,6 +1669,27 @@ public static class EffectorRuntime
             ?? throw new InvalidOperationException("DrawingContextImpl current canvas was null.");
         var previousSurface = GetCurrentSurface(drawingContext)
             ?? (SKSurface?)s_skiaBaseSurfaceField.GetValue(drawingContext);
+
+        // Capture the compositor's GRContext on first render.  This context
+        // manages all GPU textures used by the Skia compositor canvas.  We use
+        // it to enforce a tight resource cache limit on Android, preventing
+        // unbounded VRAM growth from per-frame raster→GPU texture uploads.
+        if (s_compositorGrContext is null && previousSurface?.Context is GRContext grCtx)
+        {
+            s_compositorGrContext = grCtx;
+
+            // On Android, the default GPU resource cache limit allows Skia to
+            // retain hundreds of MB of uploaded textures.  Continuous shader
+            // effects at 60fps upload ~1.4 MB/frame, exceeding MIUI's ~230 MB
+            // Graphics budget in ~60s.  A tight limit forces Skia to evict old
+            // textures during new uploads, capping steady-state VRAM growth.
+            if (OperatingSystem.IsAndroid())
+            {
+                const long androidGpuCacheLimit = 48L * 1024 * 1024;
+                grCtx.SetResourceCacheLimit(androidGpuCacheLimit);
+            }
+        }
+
         var totalMatrix = previousCanvas.TotalMatrix;
         var deviceClipBounds = previousCanvas.DeviceClipBounds;
         var deviceClip = ToSKRect(deviceClipBounds);
@@ -1937,6 +1966,25 @@ public static class EffectorRuntime
         finally
         {
             DrainDeferredRenderResources(force: false);
+
+            // After draining deferred render resources, purge orphaned scratch
+            // GPU textures.  When ForceRasterCapture is true (Linux/Android),
+            // each DrawImage(cpuSnapshot) call uploads a new GPU texture.  The
+            // SetResourceCacheLimit above bounds the steady-state, but an
+            // explicit purge ensures timely eviction of textures whose backing
+            // SKImages have been disposed by the deferred queue drain.
+            if (s_compositorGrContext is not null)
+            {
+                try
+                {
+                    s_compositorGrContext.Flush();
+                    s_compositorGrContext.PurgeUnlockedResources(true);
+                }
+                catch
+                {
+                    // Best effort: the context may have been invalidated.
+                }
+            }
         }
 
         return true;
@@ -2562,12 +2610,32 @@ public static class EffectorRuntime
     {
         ArgumentNullException.ThrowIfNull(disposable);
 
+        List<IDisposable>? overflow = null;
+
         lock (DeferredRenderResourceSync)
         {
+            // Evict the oldest entries when the queue exceeds the cap.  This bounds
+            // the peak GPU / native memory that deferred render resources can occupy,
+            // which prevents OOM kills on memory-constrained Android devices where
+            // the Skia GPU resource cache retains uploaded textures.
+            while (DeferredRenderResources.Count >= MaxDeferredRenderResources)
+            {
+                overflow ??= new List<IDisposable>();
+                overflow.Add(DeferredRenderResources.Dequeue().Disposable);
+            }
+
             DeferredRenderResources.Enqueue(
                 new DeferredRenderResourceEntry(
                     disposable,
                     DateTime.UtcNow + DeferredRenderResourceDisposeDelay));
+        }
+
+        if (overflow is not null)
+        {
+            for (var index = 0; index < overflow.Count; index++)
+            {
+                overflow[index].Dispose();
+            }
         }
 
         // Dispose on the UI dispatcher after the grace period instead of invalidating the host
