@@ -51,6 +51,9 @@ public static class EffectorRuntime
     private static readonly Queue<DeferredRenderResourceEntry> DeferredRenderResources = new();
     [ThreadStatic] private static bool s_suppressShaderEffectsForVisualSnapshot;
     private static GRContext? s_compositorGrContext;
+    // Set from the Android UI thread (OnTrimMemory); consumed on the render thread
+    // inside TryEndShaderEffect.  Volatile ensures the write is visible without a lock.
+    private static volatile bool s_pendingTrimMemoryPurge;
     private static bool s_initialized;
     private static bool s_skiaPatched;
     private static Type? s_skiaDrawingContextType;
@@ -224,7 +227,7 @@ public static class EffectorRuntime
         // within 60-90 seconds of continuous shader animation.
         // Both platforms use CPU-backed raster surfaces for capture while the
         // runtime shader still executes on the GPU-backed compositor canvas.
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || OperatingSystem.IsAndroid();
     }
 
     public static void EnsureInitialized()
@@ -238,6 +241,16 @@ public static class EffectorRuntime
 
             s_initialized = true;
         }
+    }
+
+    /// <summary>
+    /// Signals the render thread to perform a full GRContext purge on the next frame.
+    /// Safe to call from any thread (e.g. Android's <c>OnTrimMemory</c> callback).
+    /// The actual purge runs on the render thread, which owns the GL context.
+    /// </summary>
+    public static void RequestTrimMemoryPurge()
+    {
+        s_pendingTrimMemoryPurge = true;
     }
 
     // Effector depends on SkiaSharp 3.x+, so direct runtime shaders should be
@@ -1978,7 +1991,12 @@ public static class EffectorRuntime
                 try
                 {
                     s_compositorGrContext.Flush();
-                    s_compositorGrContext.PurgeUnlockedResources(true);
+                    // On TrimMemory (flag set from UI thread), evict ALL unlocked GPU
+                    // resources for maximum memory recovery.  Normal frames only evict
+                    // scratch textures (scratchOnly: true).
+                    var scratchOnly = !s_pendingTrimMemoryPurge;
+                    s_pendingTrimMemoryPurge = false;
+                    s_compositorGrContext.PurgeUnlockedResources(scratchOnly);
                 }
                 catch
                 {
