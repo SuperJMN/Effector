@@ -1994,8 +1994,15 @@ public static class EffectorRuntime
                     // On TrimMemory (flag set from UI thread), evict ALL unlocked GPU
                     // resources for maximum memory recovery.  Normal frames only evict
                     // scratch textures (scratchOnly: true).
-                    var scratchOnly = !s_pendingTrimMemoryPurge;
-                    s_pendingTrimMemoryPurge = false;
+                    // Conditional clear: only reset the flag when we actually read it as true,
+                    // so a signal arriving between our read and a hypothetical unconditional
+                    // clear is not lost — it will be picked up on the next frame instead.
+                    var scratchOnly = true;
+                    if (s_pendingTrimMemoryPurge)
+                    {
+                        s_pendingTrimMemoryPurge = false;
+                        scratchOnly = false;
+                    }
                     s_compositorGrContext.PurgeUnlockedResources(scratchOnly);
                 }
                 catch
