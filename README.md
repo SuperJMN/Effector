@@ -483,6 +483,7 @@ There is also a dedicated package-consumer workflow:
 - Effector is designed around `Avalonia.Skia`.
 - If your effect needs render-thread execution, implement the value-factory interfaces so rendering can use immutable snapshots only.
 - Unsupported or incompatible effect types during interpolation fall back to step behavior rather than inventing custom interpolation semantics.
+- **Avoid placing both an `Effect` and a large non-identity `RenderTransform` (e.g. `ScaleTransform` 1.5× or larger, especially with non-default `RenderTransformOrigin`) on the same `Visual`.** The capture snapshot used by shader effects can end up empty or misaligned, making the visual appear to vanish while the effect runs. Workaround: put the `RenderTransform` on a child (or parent) of the visual that carries the `Effect`. Small transient transforms used by short animations (e.g. ~1.05× pulses) usually do not trigger the issue.
 
 ## License
 
