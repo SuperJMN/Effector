@@ -2458,6 +2458,105 @@ public sealed class EffectorRuntimeBehaviorTests
         }, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Smoke test for combining a non-identity <see cref="ScaleTransform"/> AND a shader
+    /// <see cref="Effect"/> on the same Visual, anchored at bottom-center
+    /// (RenderTransformOrigin = (0.5, 1.0)) with scale 1.5x — matches the per-actor
+    /// "perspective" pattern used by PokemonBattleEngine.Gui.
+    /// <para>
+    /// NOTE: This test currently <b>passes</b>, which means the headless render path with
+    /// a simple overlay (SrcOver-like) shader does not reproduce the vanishing-sprite
+    /// symptom seen in the field with masked Screen-blend shaders (e.g. HealGlare). The
+    /// test stays in place as a regression marker for the simple case; reproducing the
+    /// real bug likely requires an interactive Skia run with a masked snapshot blend mode.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task OverlayShaderEffect_Preserves_FilledChildBounds_With_BottomAnchoredScale()
+    {
+        await Session.Dispatch(() =>
+        {
+            var scale = new ScaleTransform(1.5d, 1.5d);
+            var host = new Panel
+            {
+                Width = 200,
+                Height = 200,
+                RenderTransform = scale,
+                RenderTransformOrigin = new RelativePoint(0.5d, 1.0d, RelativeUnit.Relative),
+                Children =
+                {
+                    new Border
+                    {
+                        Background = new SolidColorBrush(Color.Parse("#1599AD")),
+                        Child = new TextBlock
+                        {
+                            Text = "CONTENT",
+                            FontSize = 32,
+                            FontWeight = FontWeight.Bold,
+                            Foreground = new SolidColorBrush(Color.Parse("#D6F0BE")),
+                            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+                        }
+                    }
+                }
+            };
+
+            var window = new Window
+            {
+                Width = 520,
+                Height = 540,
+                Background = Brushes.White,
+                Content = new Canvas
+                {
+                    Children =
+                    {
+                        host
+                    }
+                }
+            };
+
+            // Place the host so the post-scale AABB stays well inside the window:
+            // bottom-anchored 1.5x of a 200x200 host extends 50px to each side and
+            // 100px upward from the host's local top — anchor (160, 380) keeps it
+            // safely within the 520x540 window.
+            Canvas.SetLeft(host, 160d);
+            Canvas.SetTop(host, 80d);
+
+            window.Show();
+            window.UpdateLayout();
+
+            using var baseline = window.CaptureRenderedFrame();
+            Assert.NotNull(baseline);
+
+            host.Effect = new Issue10OverlayShaderEffect
+            {
+                Progress = 0.5d
+            };
+            EffectorRuntime.ClearShaderDebugInfo();
+            window.UpdateLayout();
+
+            using var effected = window.CaptureRenderedFrame();
+            Assert.NotNull(effected);
+
+            var baselineBounds = FindNonWhiteBounds(baseline!);
+            var effectedBounds = FindNonWhiteBounds(effected!);
+            Assert.True(EffectorRuntime.TryGetLastShaderDebugInfo(typeof(Issue10OverlayShaderEffect), out var debugInfo));
+
+            var message =
+                $"baseline={FormatRect(baselineBounds)}; " +
+                $"effected={FormatRect(effectedBounds)}; " +
+                $"capture={FormatRect(debugInfo.RawEffectRect ?? debugInfo.EffectBounds)}; " +
+                $"surface={debugInfo.IntermediateSurfaceBounds.Left},{debugInfo.IntermediateSurfaceBounds.Top},{debugInfo.IntermediateSurfaceBounds.Right},{debugInfo.IntermediateSurfaceBounds.Bottom}; " +
+                $"matrix={debugInfo.TotalMatrix.ScaleX},{debugInfo.TotalMatrix.SkewX},{debugInfo.TotalMatrix.TransX},{debugInfo.TotalMatrix.SkewY},{debugInfo.TotalMatrix.ScaleY},{debugInfo.TotalMatrix.TransY}";
+
+            Assert.False(effectedBounds.IsEmpty, "Sprite vanished while shader effect was active. " + message);
+            Assert.True(Math.Abs(effectedBounds.Left - baselineBounds.Left) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Top - baselineBounds.Top) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Right - baselineBounds.Right) <= 3f, message);
+            Assert.True(Math.Abs(effectedBounds.Bottom - baselineBounds.Bottom) <= 3f, message);
+        }, CancellationToken.None);
+    }
+
     [Fact(Skip = HeadlessRenderCaptureSkipReason)]
     public async Task ShaderEffect_IsClipped_To_EffectedVisualBounds()
     {

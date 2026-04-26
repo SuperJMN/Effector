@@ -483,7 +483,7 @@ There is also a dedicated package-consumer workflow:
 - Effector is designed around `Avalonia.Skia`.
 - If your effect needs render-thread execution, implement the value-factory interfaces so rendering can use immutable snapshots only.
 - Unsupported or incompatible effect types during interpolation fall back to step behavior rather than inventing custom interpolation semantics.
-- **Avoid placing both an `Effect` and a large non-identity `RenderTransform` (e.g. `ScaleTransform` 1.5× or larger, especially with non-default `RenderTransformOrigin`) on the same `Visual`.** The capture snapshot used by shader effects can end up empty or misaligned, making the visual appear to vanish while the effect runs. Workaround: put the `RenderTransform` on a child (or parent) of the visual that carries the `Effect`. Small transient transforms used by short animations (e.g. ~1.05× pulses) usually do not trigger the issue.
+- **Combining an `Effect` and a large non-identity `RenderTransform` (e.g. `ScaleTransform` 1.5× or larger, especially with a non-default `RenderTransformOrigin`) on the same `Visual` has been observed to make the visual disappear during the effect in some real-world Skia renders — most notably with masked / `Screen`-blend shaders such as a "heal glare". Headless overlay-shader tests do NOT reproduce this, so the root cause is not yet pinned down (it may be Avalonia render-pass ordering, the masked-overlay path, or interaction with specific blend modes). Pragmatic workaround: put the `RenderTransform` on a child (or parent) of the visual that carries the `Effect`. Small transient transforms used by short animations (e.g. ~1.05× pulses) do not appear to trigger the issue.
 
 ## License
 
