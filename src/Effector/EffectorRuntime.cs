@@ -1925,7 +1925,11 @@ public static class EffectorRuntime
                 // For "outside the silhouette" shaders (MaskToContent=false) the
                 // overlay must be free to draw across the whole effect rect, not
                 // clipped to the captured visual's opaque pixels. Recompute the
-                // overlay bounds against LocalEffectBounds in that case.
+                // overlay bounds against LocalEffectBounds AND rebuild the shader
+                // with a context anchored to those bounds — otherwise the shader's
+                // uniforms (width/height) and local matrix stay anchored to the
+                // tight bbox of opaque pixels, which shifts as the sprite animates
+                // and the "center of mass" of opaque pixels moves.
                 if (shaderEffect is { MaskToContent: false })
                 {
                     overlayContentBounds = frame.LocalEffectBounds;
@@ -1934,6 +1938,16 @@ public static class EffectorRuntime
                         normalizedOverlayBounds,
                         frame.IntermediateSurfaceBounds.Left + overlayContentBounds.Left,
                         frame.IntermediateSurfaceBounds.Top + overlayContentBounds.Top);
+
+                    shaderEffect.Dispose();
+                    var rebuiltContext = new SkiaShaderEffectContext(
+                        frame.EffectContext,
+                        snapshot,
+                        SKRect.Create(snapshot.Width, snapshot.Height),
+                        normalizedOverlayBounds);
+                    shaderEffect = TryCreateShaderEffect(frame.Effect, rebuiltContext, out var rebuilt)
+                        ? rebuilt
+                        : null;
                 }
 
                 var restoreCount = frame.PreviousCanvas.Save();
