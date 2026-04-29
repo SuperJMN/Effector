@@ -34,7 +34,8 @@ public static class SkiaRuntimeShaderBuilder
         SKMatrix? localMatrix = null,
         Action<SKCanvas, SKImage, SKRect>? fallbackRenderer = null,
         Action<SKRuntimeEffectChildren, SkiaShaderEffectContext, ICollection<IDisposable>>? configureOwnedChildren = null,
-        IEnumerable<IDisposable>? ownedResources = null)
+        IEnumerable<IDisposable>? ownedResources = null,
+        bool maskToContent = true)
         => CreateCore(
             sksl,
             context,
@@ -49,7 +50,8 @@ public static class SkiaRuntimeShaderBuilder
             fallbackRenderer,
             configureOwnedChildren,
             ownedResources,
-            EffectorRuntime.DirectRuntimeShadersEnabled);
+            EffectorRuntime.DirectRuntimeShadersEnabled,
+            maskToContent);
 
     internal static SkiaShaderEffect CreateCore(
         string sksl,
@@ -65,7 +67,8 @@ public static class SkiaRuntimeShaderBuilder
         Action<SKCanvas, SKImage, SKRect>? fallbackRenderer,
         Action<SKRuntimeEffectChildren, SkiaShaderEffectContext, ICollection<IDisposable>>? configureOwnedChildren = null,
         IEnumerable<IDisposable>? ownedResources = null,
-        bool directRuntimeShadersEnabled = true)
+        bool directRuntimeShadersEnabled = true,
+        bool maskToContent = true)
     {
         if (string.IsNullOrWhiteSpace(sksl))
         {
@@ -85,7 +88,8 @@ public static class SkiaRuntimeShaderBuilder
                 resolvedDestinationRect,
                 resolvedLocalMatrix,
                 fallbackRenderer,
-                baseOwnedResources);
+                baseOwnedResources,
+                maskToContent);
         }
 
         List<IDisposable>? transientOwnedResources = null;
@@ -121,7 +125,8 @@ public static class SkiaRuntimeShaderBuilder
                 resolvedDestinationRect,
                 resolvedLocalMatrix,
                 fallbackRenderer,
-                CombineOwnedResources(baseOwnedResources, transientOwnedResources));
+                CombineOwnedResources(baseOwnedResources, transientOwnedResources),
+                maskToContent);
         }
         catch when (fallbackRenderer is not null)
         {
@@ -133,7 +138,8 @@ public static class SkiaRuntimeShaderBuilder
                 resolvedDestinationRect,
                 resolvedLocalMatrix,
                 fallbackRenderer,
-                baseOwnedResources);
+                baseOwnedResources,
+                maskToContent);
         }
         catch
         {

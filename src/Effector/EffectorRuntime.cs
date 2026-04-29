@@ -1922,6 +1922,20 @@ public static class EffectorRuntime
                     ? created
                     : null;
 
+                // For "outside the silhouette" shaders (MaskToContent=false) the
+                // overlay must be free to draw across the whole effect rect, not
+                // clipped to the captured visual's opaque pixels. Recompute the
+                // overlay bounds against LocalEffectBounds in that case.
+                if (shaderEffect is { MaskToContent: false })
+                {
+                    overlayContentBounds = frame.LocalEffectBounds;
+                    normalizedOverlayBounds = NormalizeRectToOrigin(overlayContentBounds);
+                    overlayDestinationBounds = OffsetRect(
+                        normalizedOverlayBounds,
+                        frame.IntermediateSurfaceBounds.Left + overlayContentBounds.Left,
+                        frame.IntermediateSurfaceBounds.Top + overlayContentBounds.Top);
+                }
+
                 var restoreCount = frame.PreviousCanvas.Save();
                 try
                 {
@@ -2822,8 +2836,12 @@ public static class EffectorRuntime
         SKRect destinationOriginBounds,
         SKPoint snapshotLocalOffset)
     {
+        var maskToContent = shaderEffect.MaskToContent;
         var destinationRect = Intersect(shaderEffect.DestinationRect ?? contentBounds, effectBounds);
-        destinationRect = Intersect(destinationRect, contentBounds);
+        if (maskToContent)
+        {
+            destinationRect = Intersect(destinationRect, contentBounds);
+        }
         if (destinationRect.IsEmpty)
         {
             return false;
@@ -2863,8 +2881,11 @@ public static class EffectorRuntime
                     shaderEffect.RenderFallback(canvas, snapshot);
                 }
 
-                using var maskPaint = new SKPaint { BlendMode = SKBlendMode.DstIn };
-                canvas.DrawImage(snapshot, snapshotLocalOffset.X, snapshotLocalOffset.Y, maskPaint);
+                if (maskToContent)
+                {
+                    using var maskPaint = new SKPaint { BlendMode = SKBlendMode.DstIn };
+                    canvas.DrawImage(snapshot, snapshotLocalOffset.X, snapshotLocalOffset.Y, maskPaint);
+                }
             }
             finally
             {

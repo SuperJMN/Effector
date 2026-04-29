@@ -15,7 +15,8 @@ public sealed class SkiaShaderEffect : IDisposable
         SKRect? destinationRect = null,
         SKMatrix? localMatrix = null,
         Action<SKCanvas, SKImage, SKRect>? fallbackRenderer = null,
-        IEnumerable<IDisposable>? ownedResources = null)
+        IEnumerable<IDisposable>? ownedResources = null,
+        bool maskToContent = true)
     {
         if (shader is null && fallbackRenderer is null)
         {
@@ -28,6 +29,7 @@ public sealed class SkiaShaderEffect : IDisposable
         DestinationRect = destinationRect;
         LocalMatrix = localMatrix;
         FallbackRenderer = fallbackRenderer;
+        MaskToContent = maskToContent;
         _ownedResources = ownedResources is null
             ? Array.Empty<IDisposable>()
             : new List<IDisposable>(ownedResources).ToArray();
@@ -44,6 +46,15 @@ public sealed class SkiaShaderEffect : IDisposable
     public SKMatrix? LocalMatrix { get; }
 
     public Action<SKCanvas, SKImage, SKRect>? FallbackRenderer { get; }
+
+    /// <summary>
+    /// When true (default), the runtime masks the shader output by the captured
+    /// visual's alpha (DstIn), so output is clipped to the visible silhouette.
+    /// When false, the shader fills its requested bounds even where the source
+    /// visual is transparent — required for auras, glares, mists, halos and
+    /// other "outside the silhouette" effects.
+    /// </summary>
+    public bool MaskToContent { get; }
 
     public void RenderFallback(SKCanvas canvas, SKImage contentImage)
     {
