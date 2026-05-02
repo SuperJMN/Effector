@@ -22,7 +22,7 @@ namespace Effector;
 
 public static class EffectorRuntime
 {
-    private const string SupportedAvaloniaVersion = "12.0.0";
+    private const string SupportedAvaloniaVersion = "12.0.2";
     private static readonly TimeSpan DeferredRenderResourceDisposeDelay = TimeSpan.FromMilliseconds(32);
     private const int MaxDeferredRenderResources = 4;
     private static readonly Version? SkiaSharpAssemblyVersion = typeof(SKRuntimeEffect).Assembly.GetName().Version;
@@ -541,7 +541,9 @@ public static class EffectorRuntime
         EnsureEffectAnimatorMetadata(animator);
 
         _ = shouldPauseOnInvisible;
-        var subject = s_effectAnimatorDisposeSubjectCtor.Invoke(new object?[] { animator, animation, control, clock, onComplete });
+        var subjectCtor = s_effectAnimatorDisposeSubjectCtor
+            ?? throw new InvalidOperationException("Effect animator metadata was not initialized.");
+        var subject = subjectCtor.Invoke(new object?[] { animator, animation, control, clock, onComplete });
         disposable = new EffectorCompositeDisposable(
             match.Subscribe((IObserver<bool>)subject),
             (IDisposable)subject);

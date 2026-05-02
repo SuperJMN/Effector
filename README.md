@@ -4,7 +4,7 @@
 [![Integration](https://img.shields.io/github/actions/workflow/status/wieslawsoltes/Effector/integration.yml?branch=main&label=integration)](https://github.com/wieslawsoltes/Effector/actions/workflows/integration.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/wieslawsoltes/Effector/release.yml?label=release)](https://github.com/wieslawsoltes/Effector/actions/workflows/release.yml)
 
-Effector brings extensible Skia-backed custom effects to Avalonia `12.0.0` while preserving the public `Visual.Effect : IEffect?` contract. It combines compile-time effect weaving, app-local Avalonia assembly patching, immutable render-thread snapshots, runtime shader support, input-driven effects, and NativeAOT-aware packaging.
+Effector brings extensible Skia-backed custom effects to Avalonia `12.0.2` while preserving the public `Visual.Effect : IEffect?` contract. It combines compile-time effect weaving, app-local Avalonia assembly patching, immutable render-thread snapshots, runtime shader support, input-driven effects, and NativeAOT-aware packaging.
 
 ## Packages
 
@@ -23,13 +23,13 @@ Effector brings extensible Skia-backed custom effects to Avalonia `12.0.0` while
 
 ## Compatibility
 
-- Avalonia: `12.0.0`
+- Avalonia: `12.0.2`
 - Renderer: `Avalonia.Skia`
 - Runtime targets:
   - normal desktop JIT builds are supported
   - NativeAOT publish is supported through the packaged MSBuild patching pipeline
 - Not targeted in this repository:
-  - arbitrary Avalonia versions outside `12.0.0`
+  - arbitrary Avalonia versions outside `12.0.2`
   - non-Skia renderers
   - string parsers or transitions for effects not registered through Effector
 
@@ -291,7 +291,7 @@ Supported MSBuild switches:
   <EffectorEnabled>true</EffectorEnabled>
   <EffectorStrict>true</EffectorStrict>
   <EffectorVerbose>false</EffectorVerbose>
-  <EffectorSupportedAvaloniaVersion>12.0.0</EffectorSupportedAvaloniaVersion>
+  <EffectorSupportedAvaloniaVersion>12.0.2</EffectorSupportedAvaloniaVersion>
 </PropertyGroup>
 ```
 
@@ -414,18 +414,18 @@ dotnet pack src/Effector/Effector.csproj \
   -p:GeneratePackageOnBuild=false \
   -o artifacts/local-feed
 
-rm -rf ~/.nuget/packages/effector/0.9.2
+rm -rf ~/.nuget/packages/effector/0.9.3-preview.1
 
 dotnet restore integration/Effector.PackageIntegration.App/Effector.PackageIntegration.App.csproj \
   --configfile integration/NuGet.config \
   --no-cache \
-  -p:EffectorPackageVersion=0.9.2
+  -p:EffectorPackageVersion=0.9.3-preview.1
 
 dotnet build integration/Effector.PackageIntegration.Tests/Effector.PackageIntegration.Tests.csproj \
   -c Release \
   -m:1 \
   --no-restore \
-  -p:EffectorPackageVersion=0.9.2
+  -p:EffectorPackageVersion=0.9.3-preview.1
 
 AVALONIA_SCREENSHOT_DIR=$PWD/artifacts/integration-screenshots \
 DYLD_LIBRARY_PATH=$PWD/integration/Effector.PackageIntegration.Tests/bin/Release/net8.0/runtimes/osx/native \
@@ -445,7 +445,7 @@ dotnet publish integration/Effector.PackageIntegration.App/Effector.PackageInteg
   -r osx-arm64 \
   --configfile integration/NuGet.config \
   --no-cache \
-  -p:EffectorPackageVersion=0.9.2 \
+  -p:EffectorPackageVersion=0.9.3-preview.1 \
   -p:PublishAot=true \
   -p:StripSymbols=false \
   -p:GeneratePackageOnBuild=false
@@ -479,7 +479,7 @@ There is also a dedicated package-consumer workflow:
 
 ## Limitations
 
-- Avalonia version support is intentionally pinned to `12.0.0`.
+- Avalonia version support is intentionally pinned to the verified Avalonia patch version, currently `12.0.2`, because Effector patches Avalonia IL and internal Skia integration points.
 - Effector is designed around `Avalonia.Skia`.
 - If your effect needs render-thread execution, implement the value-factory interfaces so rendering can use immutable snapshots only.
 - Unsupported or incompatible effect types during interpolation fall back to step behavior rather than inventing custom interpolation semantics.
