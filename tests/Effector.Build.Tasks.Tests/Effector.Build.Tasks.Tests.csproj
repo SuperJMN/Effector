@@ -9,6 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Effector\Effector.csproj"
                       AdditionalProperties="GeneratePackageOnBuild=false" />
+    <ProjectReference Include="..\..\src\Effector.SelfWeaver\Effector.SelfWeaver.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Effector.Build.Tasks\Effector.Build.Tasks.csproj" />
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />

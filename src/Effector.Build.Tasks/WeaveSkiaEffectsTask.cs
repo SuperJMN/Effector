@@ -19,7 +19,7 @@ public sealed class WeaveSkiaEffectsTask : Microsoft.Build.Utilities.Task
 
     public ITaskItem[]? ReferencePaths { get; set; }
 
-    public string SupportedAvaloniaVersion { get; set; } = "12.0.0";
+    public string SupportedAvaloniaVersion { get; set; } = "12.0.2";
 
     public override bool Execute()
     {

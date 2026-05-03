@@ -1555,7 +1555,7 @@ public static class EffectorRuntime
         if (!string.Equals(actual, SupportedAvaloniaVersion, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Effector only supports Avalonia 12.0.0. Detected {assemblyName} {actual}.");
+                $"Effector only supports Avalonia 12.0.2. Detected {assemblyName} {actual}.");
         }
     }
 

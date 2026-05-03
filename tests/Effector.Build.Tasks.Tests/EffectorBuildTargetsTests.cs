@@ -33,8 +33,8 @@ public sealed class EffectorBuildTargetsTests
         var initialBasePath = Path.Combine(assetsRoot, "arm64-v8a", "Avalonia.Base.dll");
         var initialSkiaPath = Path.Combine(assetsRoot, "arm64-v8a", "Avalonia.Skia.dll");
 
-        Assert.False(scanner.Scan(initialBasePath, "12.0.0", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched);
-        Assert.False(scanner.Scan(initialSkiaPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched);
+        Assert.False(scanner.Scan(initialBasePath, "12.0.2", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched);
+        Assert.False(scanner.Scan(initialSkiaPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched);
 
         var projectPath = Path.Combine(testRoot, "AndroidPatchHarness.csproj");
         CreateAndroidPatchHarnessProject(projectPath, intermediateOutputPath);
@@ -56,8 +56,8 @@ public sealed class EffectorBuildTargetsTests
         foreach (var abi in new[] { "arm64-v8a", "x86_64" })
         {
             var abiDirectory = Path.Combine(assetsRoot, abi);
-            var baseScan = scanner.Scan(Path.Combine(abiDirectory, "Avalonia.Base.dll"), "12.0.0", AvaloniaPatchAssemblyKind.Base);
-            var skiaScan = scanner.Scan(Path.Combine(abiDirectory, "Avalonia.Skia.dll"), "12.0.0", AvaloniaPatchAssemblyKind.Skia);
+            var baseScan = scanner.Scan(Path.Combine(abiDirectory, "Avalonia.Base.dll"), "12.0.2", AvaloniaPatchAssemblyKind.Base);
+            var skiaScan = scanner.Scan(Path.Combine(abiDirectory, "Avalonia.Skia.dll"), "12.0.2", AvaloniaPatchAssemblyKind.Skia);
 
             Assert.True(baseScan.IsAlreadyPatched, $"Expected Avalonia.Base.dll in '{abiDirectory}' to be patched.{Environment.NewLine}{result.Output}");
             Assert.True(skiaScan.IsAlreadyPatched, $"Expected Avalonia.Skia.dll in '{abiDirectory}' to be patched.{Environment.NewLine}{result.Output}");
@@ -78,8 +78,8 @@ public sealed class EffectorBuildTargetsTests
         var initialSkiaPath = Path.Combine(referencesRoot, "Avalonia.Skia.dll");
         var scanner = new AvaloniaPatchMetadataScanner();
 
-        Assert.False(scanner.Scan(initialBasePath, "12.0.0", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched);
-        Assert.False(scanner.Scan(initialSkiaPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched);
+        Assert.False(scanner.Scan(initialBasePath, "12.0.2", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched);
+        Assert.False(scanner.Scan(initialSkiaPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched);
 
         var intermediateOutputPath = Path.Combine(testRoot, "obj", "Debug", "net8.0-browser");
         var capturePath = Path.Combine(testRoot, "browser-reference-copy-local-paths.txt");
@@ -106,10 +106,10 @@ public sealed class EffectorBuildTargetsTests
 
         Assert.True(File.Exists(stagedBasePath), $"Expected staged Avalonia.Base.dll at '{stagedBasePath}'.{Environment.NewLine}{result.Output}");
         Assert.True(File.Exists(stagedSkiaPath), $"Expected staged Avalonia.Skia.dll at '{stagedSkiaPath}'.{Environment.NewLine}{result.Output}");
-        Assert.True(scanner.Scan(stagedBasePath, "12.0.0", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, result.Output);
-        Assert.True(scanner.Scan(stagedSkiaPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, result.Output);
-        Assert.False(scanner.Scan(initialBasePath, "12.0.0", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, result.Output);
-        Assert.False(scanner.Scan(initialSkiaPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, result.Output);
+        Assert.True(scanner.Scan(stagedBasePath, "12.0.2", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, result.Output);
+        Assert.True(scanner.Scan(stagedSkiaPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, result.Output);
+        Assert.False(scanner.Scan(initialBasePath, "12.0.2", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, result.Output);
+        Assert.False(scanner.Scan(initialSkiaPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, result.Output);
 
         Assert.True(File.Exists(capturePath), $"Expected capture file at '{capturePath}'.{Environment.NewLine}{result.Output}");
         var lines = File.ReadAllLines(capturePath);
@@ -133,10 +133,10 @@ public sealed class EffectorBuildTargetsTests
             testRoot);
 
         Assert.True(secondResult.ExitCode == 0, secondResult.Output);
-        Assert.True(scanner.Scan(stagedBasePath, "12.0.0", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, secondResult.Output);
-        Assert.True(scanner.Scan(stagedSkiaPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, secondResult.Output);
-        Assert.False(scanner.Scan(initialBasePath, "12.0.0", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, secondResult.Output);
-        Assert.False(scanner.Scan(initialSkiaPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, secondResult.Output);
+        Assert.True(scanner.Scan(stagedBasePath, "12.0.2", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, secondResult.Output);
+        Assert.True(scanner.Scan(stagedSkiaPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, secondResult.Output);
+        Assert.False(scanner.Scan(initialBasePath, "12.0.2", AvaloniaPatchAssemblyKind.Base).IsAlreadyPatched, secondResult.Output);
+        Assert.False(scanner.Scan(initialSkiaPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia).IsAlreadyPatched, secondResult.Output);
 
         var secondLines = File.ReadAllLines(capturePath);
         Assert.Contains(secondLines, line => line.StartsWith(stagedBasePath + "|", StringComparison.Ordinal));
@@ -308,7 +308,7 @@ public sealed class EffectorBuildTargetsTests
             new XElement("CopyToPublishDirectory", "PreserveNewest"),
             new XElement("CopyToOutputDirectory", "PreserveNewest"),
             new XElement("NuGetPackageId", "Avalonia"),
-            new XElement("NuGetPackageVersion", "12.0.0"),
+            new XElement("NuGetPackageVersion", "12.0.2"),
             new XElement("ReferenceSourceTarget", "PackageReference"),
             new XElement("ResolvedFrom", "NuGetPackage"));
     }

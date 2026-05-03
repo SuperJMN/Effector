@@ -1,6 +1,8 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
 using Effector;
@@ -147,6 +149,28 @@ public sealed class EffectorWeaverTests
     }
 
     [Fact]
+    public async Task SelfWeaver_AllowsConcurrentRuns_OnSameAssembly()
+    {
+        var assemblyPath = CopyToTemporaryPath(GetEffectorRuntimePath());
+        var selfWeaverPath = GetSelfWeaverPath();
+
+        var tasks = Enumerable
+            .Range(0, 8)
+            .Select(_ => Task.Run(() => RunSelfWeaver(selfWeaverPath, assemblyPath)))
+            .ToArray();
+
+        var results = await Task.WhenAll(tasks);
+
+        foreach (var result in results)
+        {
+            Assert.True(result.ExitCode == 0, result.Output);
+        }
+
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(assemblyPath)!, "*.effector.tmp"));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(assemblyPath)!, "*.effector.pdb"));
+    }
+
+    [Fact]
     public void Weaver_RejectsFactories_WithoutValueSnapshotSupport()
     {
         var assemblyPath = BuildTemporaryAssembly(
@@ -269,7 +293,7 @@ public sealed class EffectorWeaverTests
     {
         var sourcePath = GetAvaloniaBasePath();
         var scanner = new AvaloniaPatchMetadataScanner();
-        var initialScan = scanner.Scan(sourcePath, "12.0.0", AvaloniaPatchAssemblyKind.Base);
+        var initialScan = scanner.Scan(sourcePath, "12.0.2", AvaloniaPatchAssemblyKind.Base);
         Assert.True(initialScan.IsSupportedVersion);
         Assert.False(initialScan.IsAlreadyPatched);
         Assert.Empty(initialScan.MissingRequirements);
@@ -277,17 +301,17 @@ public sealed class EffectorWeaverTests
         var tempPath = CopyToTemporaryPath(sourcePath);
         var patcher = new AvaloniaAssemblyPatcher();
 
-        var first = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Base, "12.0.0");
+        var first = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Base, "12.0.2");
         Assert.True(first.Patched);
         Assert.False(first.AlreadyPatched);
         Assert.Empty(first.Errors);
 
-        var second = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Base, "12.0.0");
+        var second = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Base, "12.0.2");
         Assert.False(second.Patched);
         Assert.True(second.AlreadyPatched);
         Assert.Empty(second.Errors);
 
-        var patchedScan = scanner.Scan(tempPath, "12.0.0", AvaloniaPatchAssemblyKind.Base);
+        var patchedScan = scanner.Scan(tempPath, "12.0.2", AvaloniaPatchAssemblyKind.Base);
         Assert.True(patchedScan.IsAlreadyPatched);
 
         using var assembly = AssemblyDefinition.ReadAssembly(tempPath);
@@ -304,7 +328,7 @@ public sealed class EffectorWeaverTests
     {
         var sourcePath = GetAvaloniaSkiaPath();
         var scanner = new AvaloniaPatchMetadataScanner();
-        var initialScan = scanner.Scan(sourcePath, "12.0.0", AvaloniaPatchAssemblyKind.Skia);
+        var initialScan = scanner.Scan(sourcePath, "12.0.2", AvaloniaPatchAssemblyKind.Skia);
         Assert.True(initialScan.IsSupportedVersion);
         Assert.False(initialScan.IsAlreadyPatched);
         Assert.Empty(initialScan.MissingRequirements);
@@ -312,17 +336,17 @@ public sealed class EffectorWeaverTests
         var tempPath = CopyToTemporaryPath(sourcePath);
         var patcher = new AvaloniaAssemblyPatcher();
 
-        var first = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Skia, "12.0.0");
+        var first = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Skia, "12.0.2");
         Assert.True(first.Patched);
         Assert.False(first.AlreadyPatched);
         Assert.Empty(first.Errors);
 
-        var second = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Skia, "12.0.0");
+        var second = patcher.Patch(tempPath, AvaloniaPatchAssemblyKind.Skia, "12.0.2");
         Assert.False(second.Patched);
         Assert.True(second.AlreadyPatched);
         Assert.Empty(second.Errors);
 
-        var patchedScan = scanner.Scan(tempPath, "12.0.0", AvaloniaPatchAssemblyKind.Skia);
+        var patchedScan = scanner.Scan(tempPath, "12.0.2", AvaloniaPatchAssemblyKind.Skia);
         Assert.True(patchedScan.IsAlreadyPatched);
 
         using var assembly = AssemblyDefinition.ReadAssembly(tempPath);
@@ -342,7 +366,7 @@ public sealed class EffectorWeaverTests
                 verbose: true,
                 Path.GetDirectoryName(assemblyPath)!,
                 GetReferencePaths(),
-                supportedAvaloniaVersion: "12.0.0"));
+                supportedAvaloniaVersion: "12.0.2"));
 
     private static string BuildTemporaryAssembly(string? sourceOverride = null)
     {
@@ -420,6 +444,37 @@ public sealed class EffectorWeaverTests
     private static string GetAvaloniaSkiaPath() =>
         Path.Combine(Path.GetDirectoryName(typeof(Effect).Assembly.Location)!, "Avalonia.Skia.dll");
 
+    private static string GetSelfWeaverPath()
+    {
+        var copiedPath = Path.Combine(AppContext.BaseDirectory, "Effector.SelfWeaver.dll");
+        if (File.Exists(copiedPath))
+        {
+            return copiedPath;
+        }
+
+        var configuration =
+            AppContext.BaseDirectory.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                ? "Release"
+                : "Debug";
+
+        var sourceBuildPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Effector.SelfWeaver",
+            "bin",
+            configuration,
+            "net8.0",
+            "Effector.SelfWeaver.dll"));
+
+        Assert.True(File.Exists(sourceBuildPath), $"Expected Effector.SelfWeaver.dll at '{sourceBuildPath}'.");
+        return sourceBuildPath;
+    }
+
     private static string CopyToTemporaryPath(string sourcePath)
     {
         var directory = Path.Combine(Path.GetTempPath(), "effector-avalonia-patch-tests", Guid.NewGuid().ToString("N"));
@@ -434,6 +489,33 @@ public sealed class EffectorWeaverTests
         }
 
         return destinationPath;
+    }
+
+    private static ProcessResult RunSelfWeaver(string selfWeaverPath, string assemblyPath)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        process.StartInfo.ArgumentList.Add(selfWeaverPath);
+        process.StartInfo.ArgumentList.Add(assemblyPath);
+
+        process.Start();
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(30000))
+        {
+            process.Kill(entireProcessTree: true);
+            return new ProcessResult(-1, $"Timed out running Effector.SelfWeaver for '{assemblyPath}'.");
+        }
+
+        return new ProcessResult(
+            process.ExitCode,
+            string.Concat(standardOutput.GetAwaiter().GetResult(), standardError.GetAwaiter().GetResult()));
     }
 
     private static void AssertMethodCallsRuntime(
@@ -503,4 +585,6 @@ public sealed class EffectorWeaverTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private readonly record struct ProcessResult(int ExitCode, string Output);
 }

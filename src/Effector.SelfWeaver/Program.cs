@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Avalonia.Media;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -18,6 +19,8 @@ if (!File.Exists(assemblyPath))
     Console.Error.WriteLine($"Assembly was not found: {assemblyPath}");
     return 1;
 }
+
+using var assemblyLock = WaitForAssemblyLock(assemblyPath + ".effector.lock");
 
 var pdbPath = Path.ChangeExtension(assemblyPath, ".pdb");
 var readSymbols = File.Exists(pdbPath);
@@ -63,21 +66,11 @@ var writerParameters = new WriterParameters
     WriteSymbols = readSymbols,
     SymbolWriterProvider = readSymbols ? new PortablePdbWriterProvider() : null
 };
-var tempAssemblyPath = assemblyPath + ".effector.tmp";
+var tempAssemblyPath = $"{assemblyPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.effector.tmp";
 var tempPdbPath = Path.ChangeExtension(tempAssemblyPath, ".pdb");
 
 try
 {
-    if (File.Exists(tempAssemblyPath))
-    {
-        File.Delete(tempAssemblyPath);
-    }
-
-    if (File.Exists(tempPdbPath))
-    {
-        File.Delete(tempPdbPath);
-    }
-
     assembly.Write(tempAssemblyPath, writerParameters);
     File.Move(tempAssemblyPath, assemblyPath, overwrite: true);
 
@@ -100,6 +93,27 @@ finally
 }
 
 return 0;
+
+static FileStream WaitForAssemblyLock(string lockPath)
+{
+    var deadline = DateTime.UtcNow.AddMinutes(2);
+
+    while (true)
+    {
+        try
+        {
+            return File.Open(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException) when (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(50);
+        }
+        catch (UnauthorizedAccessException) when (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(50);
+        }
+    }
+}
 
 static void RewriteConstructor(ModuleDefinition module, TypeDefinition skiaEffectBase)
 {

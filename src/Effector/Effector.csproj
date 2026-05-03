@@ -5,7 +5,7 @@
     <AssemblyName>Effector</AssemblyName>
     <PackageId>Effector</PackageId>
     <Title>Effector</Title>
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <GeneratePackageOnBuild Condition="'$(GeneratePackageOnBuild)' == '' and '$(Version)' == ''">true</GeneratePackageOnBuild>
     <GeneratePackageOnBuild Condition="'$(PublishAot)' == 'true'">false</GeneratePackageOnBuild>
     <IncludeBuildOutput>true</IncludeBuildOutput>
     <IncludeSymbols>false</IncludeSymbols>

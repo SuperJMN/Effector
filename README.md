@@ -405,6 +405,8 @@ dotnet pack src/Effector/Effector.csproj \
 
 `Effector` currently publishes only the primary `.nupkg`. The runtime assembly is post-processed and duplicated into the MSBuild task payload, so a NuGet `.snupkg` does not validate reliably with the current package layout.
 
+Project-reference publish builds that pass an app-level `/p:Version=...` do not generate Effector packages by default. Pass `-p:GeneratePackageOnBuild=true` or run `dotnet pack` explicitly when producing an Effector NuGet package.
+
 Run the package-consumer integration lane locally:
 
 ```bash
@@ -414,18 +416,18 @@ dotnet pack src/Effector/Effector.csproj \
   -p:GeneratePackageOnBuild=false \
   -o artifacts/local-feed
 
-rm -rf ~/.nuget/packages/effector/0.9.3-preview.1
+rm -rf ~/.nuget/packages/effector/0.9.3-preview.2
 
 dotnet restore integration/Effector.PackageIntegration.App/Effector.PackageIntegration.App.csproj \
   --configfile integration/NuGet.config \
   --no-cache \
-  -p:EffectorPackageVersion=0.9.3-preview.1
+  -p:EffectorPackageVersion=0.9.3-preview.2
 
 dotnet build integration/Effector.PackageIntegration.Tests/Effector.PackageIntegration.Tests.csproj \
   -c Release \
   -m:1 \
   --no-restore \
-  -p:EffectorPackageVersion=0.9.3-preview.1
+  -p:EffectorPackageVersion=0.9.3-preview.2
 
 AVALONIA_SCREENSHOT_DIR=$PWD/artifacts/integration-screenshots \
 DYLD_LIBRARY_PATH=$PWD/integration/Effector.PackageIntegration.Tests/bin/Release/net8.0/runtimes/osx/native \
@@ -445,13 +447,13 @@ dotnet publish integration/Effector.PackageIntegration.App/Effector.PackageInteg
   -r osx-arm64 \
   --configfile integration/NuGet.config \
   --no-cache \
-  -p:EffectorPackageVersion=0.9.3-preview.1 \
+  -p:EffectorPackageVersion=0.9.3-preview.2 \
   -p:PublishAot=true \
   -p:StripSymbols=false \
   -p:GeneratePackageOnBuild=false
 ```
 
-Because `Effector.dll` is self-weaved in place after build, use `-m:1` or another sequential build strategy for clean solution builds. Parallel graph builds can race the self-weaver and produce stale compile surfaces.
+`Effector.dll` is self-weaved in place after build. The self-weaver serializes concurrent invocations per assembly and uses process-unique temporary files, so project-reference publish graphs can run in parallel without corrupting `Effector.dll` or its PDB. For diagnostics, `-m:1` remains useful because it keeps MSBuild logs easier to read.
 
 ## CI and Release
 

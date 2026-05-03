@@ -31,8 +31,8 @@
     <RepositoryBranch Condition="'$(RepositoryBranch)' == '' and '$(GITHUB_REF_NAME)' != ''">$(GITHUB_REF_NAME)</RepositoryBranch>
     <RepositoryCommit Condition="'$(RepositoryCommit)' == '' and '$(GITHUB_SHA)' != ''">$(GITHUB_SHA)</RepositoryCommit>
     <VersionPrefix>0.9.3</VersionPrefix>
-    <VersionSuffix>preview.1</VersionSuffix>
-    <EffectorVersion>0.9.3-preview.1</EffectorVersion>
+    <VersionSuffix>preview.2</VersionSuffix>
+    <EffectorVersion>0.9.3-preview.2</EffectorVersion>
     <AvaloniaVersion>12.0.2</AvaloniaVersion>
     <SkiaSharpVersion>3.119.4-preview.1.1</SkiaSharpVersion>
     <RootNamespace Condition="'$(RootNamespace)' == ''">$(MSBuildProjectName)</RootNamespace>
