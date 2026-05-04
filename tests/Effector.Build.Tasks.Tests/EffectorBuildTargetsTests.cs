@@ -14,6 +14,84 @@ namespace Effector.Build.Tasks.Tests;
 public sealed class EffectorBuildTargetsTests
 {
     [Fact]
+    public void LocalRuntimeReferenceBuild_Uses_IsolatedOutputPath()
+    {
+        var targets = XDocument.Load(GetBuildTargetsPath());
+
+        var runtimeAssemblyPath = GetRequiredPropertyValue(targets, "_EffectorLocalRuntimeAssemblyPath");
+        var runtimeOutputPath = GetRequiredPropertyValue(targets, "_EffectorLocalRuntimeRefOutputPath");
+        var commands = GetExecCommands(targets, "Effector_BuildLocalRuntimeReference");
+
+        Assert.Equal(@"$(_EffectorLocalRuntimeRefOutputPath)Effector.dll", runtimeAssemblyPath);
+        Assert.Equal("$([System.IO.Path]::Combine('$(_EffectorLocalRuntimeRefObjPath)', 'bin'))/", runtimeOutputPath);
+        Assert.All(commands, command => Assert.Contains("-p:OutputPath=$(_EffectorLocalRuntimeRefOutputPath)", command, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LocalTaskBuild_Uses_IsolatedOutputPath_And_ConfiguredRuntimeReference()
+    {
+        var targets = XDocument.Load(GetBuildTargetsPath());
+
+        var taskAssemblyPath = GetRequiredPropertyValue(targets, "_EffectorLocalTaskAssemblyPath");
+        var taskOutputPath = GetRequiredPropertyValue(targets, "_EffectorLocalTaskOutputPath");
+        var commands = GetExecCommands(targets, "Effector_BuildLocalTask");
+
+        Assert.Equal(@"$(_EffectorLocalTaskOutputPath)Effector.Build.Tasks.dll", taskAssemblyPath);
+        Assert.Equal("$([System.IO.Path]::Combine('$(_EffectorLocalTaskObjPath)', 'bin'))/", taskOutputPath);
+        Assert.All(commands, command => Assert.Contains("-p:OutputPath=$(_EffectorLocalTaskOutputPath)", command, StringComparison.Ordinal));
+        Assert.All(commands, command => Assert.Contains("-p:BaseIntermediateOutputPath=$(_EffectorLocalTaskObjPath)", command, StringComparison.Ordinal));
+        Assert.All(commands, command => Assert.Contains("-p:EffectorBuiltRuntimeReferencePath=$(_EffectorLocalRuntimeAssemblyPath)", command, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildTasksProject_Uses_ConfiguredBuiltRuntimeReferencePath()
+    {
+        var project = XDocument.Load(GetBuildTasksProjectPath());
+
+        var defaultReferencePath = GetRequiredPropertyValue(project, "EffectorBuiltRuntimeReferencePath");
+        var defaultItemExcludes = GetRequiredPropertyValue(project, "DefaultItemExcludes");
+        var hintPath = Assert.Single(project.Descendants("HintPath")).Value.Trim();
+
+        Assert.Equal(@"..\Effector\bin\$(Configuration)\net8.0\Effector.dll", defaultReferencePath);
+        Assert.Contains(@"$(MSBuildProjectDirectory)/obj/**/*", defaultItemExcludes, StringComparison.Ordinal);
+        Assert.Equal("$(EffectorBuiltRuntimeReferencePath)", hintPath);
+    }
+
+    [Fact]
+    public void LocalBuildPaths_Are_Resolved_Relative_To_ImportingProject()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "effector-local-build-path-tests", Guid.NewGuid().ToString("N"));
+        var projectDirectory = Path.Combine(testRoot, "src", "App");
+        var workingDirectory = Path.Combine(testRoot, "working");
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(workingDirectory);
+
+        var capturePath = Path.Combine(testRoot, "paths.txt");
+        var projectPath = Path.Combine(projectDirectory, "App.csproj");
+        CreateLocalBuildPathHarnessProject(projectPath, capturePath);
+
+        var result = RunProcess(
+            "dotnet",
+            new[]
+            {
+                "msbuild",
+                projectPath,
+                "-t:CaptureEffectorLocalBuildPaths",
+                "-v:minimal"
+            },
+            workingDirectory);
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.True(File.Exists(capturePath), result.Output);
+
+        var lines = File.ReadAllLines(capturePath);
+        var expectedBasePath = Path.GetFullPath(Path.Combine(projectDirectory, "obj")) + Path.DirectorySeparatorChar;
+
+        Assert.All(lines, line => Assert.StartsWith(expectedBasePath, line));
+        Assert.All(lines, line => Assert.DoesNotContain(workingDirectory, line, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void AndroidBuildTarget_Patches_AvaloniaAssemblies_In_AbiAssetDirectories()
     {
         var testRoot = Path.Combine(Path.GetTempPath(), "effector-android-target-tests", Guid.NewGuid().ToString("N"));
@@ -203,6 +281,33 @@ public sealed class EffectorBuildTargetsTests
         project.Save(projectPath);
     }
 
+    private static void CreateLocalBuildPathHarnessProject(string projectPath, string capturePath)
+    {
+        var project = new XDocument(
+            new XElement(
+                "Project",
+                new XAttribute("Sdk", "Microsoft.NET.Sdk"),
+                new XElement(
+                    "PropertyGroup",
+                    new XElement("TargetFramework", "net8.0"),
+                    new XElement("EffectorEnabled", "true"),
+                    new XElement("BaseIntermediateOutputPath", "obj" + Path.DirectorySeparatorChar),
+                    new XElement("CapturePath", capturePath)),
+                new XElement("Import", new XAttribute("Project", GetBuildTargetsPath())),
+                new XElement(
+                    "Target",
+                    new XAttribute("Name", "CaptureEffectorLocalBuildPaths"),
+                    new XElement(
+                        "WriteLinesToFile",
+                        new XAttribute("File", "$(CapturePath)"),
+                        new XAttribute(
+                            "Lines",
+                            "$(_EffectorLocalRuntimeRefObjPath);$(_EffectorLocalTaskObjPath)"),
+                        new XAttribute("Overwrite", "true")))));
+
+        project.Save(projectPath);
+    }
+
     private static void CopyAvaloniaAssemblyPair(string destinationDirectory)
     {
         File.Copy(GetAvaloniaBasePath(), Path.Combine(destinationDirectory, "Avalonia.Base.dll"), overwrite: true);
@@ -233,6 +338,24 @@ public sealed class EffectorBuildTargetsTests
         return new ProcessResult(process.ExitCode, string.Concat(standardOutput, standardError));
     }
 
+    private static string GetRequiredPropertyValue(XContainer document, string propertyName)
+    {
+        var property = Assert.Single(document.Descendants(propertyName));
+        return property.Value.Trim();
+    }
+
+    private static string[] GetExecCommands(XContainer document, string targetName)
+    {
+        var target = Assert.Single(document
+            .Descendants("Target")
+            .Where(element => string.Equals((string?)element.Attribute("Name"), targetName, StringComparison.Ordinal)));
+
+        return target
+            .Elements("Exec")
+            .Select(element => ((string?)element.Attribute("Command"))?.Trim() ?? string.Empty)
+            .ToArray();
+    }
+
     private static string GetBuildTargetsPath([CallerFilePath] string sourceFilePath = "")
     {
         return ResolveRepositoryFile(
@@ -255,6 +378,18 @@ public sealed class EffectorBuildTargetsTests
                 "Effector.Build",
                 "buildTransitive",
                 "Effector.Build.props"
+            },
+            sourceFilePath);
+    }
+
+    private static string GetBuildTasksProjectPath([CallerFilePath] string sourceFilePath = "")
+    {
+        return ResolveRepositoryFile(
+            new[]
+            {
+                "src",
+                "Effector.Build.Tasks",
+                "Effector.Build.Tasks.csproj"
             },
             sourceFilePath);
     }

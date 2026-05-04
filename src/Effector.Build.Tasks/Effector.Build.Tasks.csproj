@@ -5,6 +5,8 @@
     <IsPackable>false</IsPackable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <ImplicitUsings>false</ImplicitUsings>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)/obj/**/*</DefaultItemExcludes>
+    <EffectorBuiltRuntimeReferencePath Condition="'$(EffectorBuiltRuntimeReferencePath)' == ''">..\Effector\bin\$(Configuration)\net8.0\Effector.dll</EffectorBuiltRuntimeReferencePath>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(EffectorUseBuiltRuntimeReference)' != 'true'">
@@ -14,7 +16,7 @@
 
   <ItemGroup Condition="'$(EffectorUseBuiltRuntimeReference)' == 'true'">
     <Reference Include="Effector">
-      <HintPath>..\Effector\bin\$(Configuration)\net8.0\Effector.dll</HintPath>
+      <HintPath>$(EffectorBuiltRuntimeReferencePath)</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>
