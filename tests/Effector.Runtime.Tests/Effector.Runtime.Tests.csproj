@@ -8,7 +8,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Effector\Effector.csproj"
-                      AdditionalProperties="GeneratePackageOnBuild=false" />
+                      PrivateAssets="all"
+                      AdditionalProperties="GeneratePackageOnBuild=false;BaseOutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/;OutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/$(Configuration)/net8.0/" />
     <ProjectReference Include="..\..\samples\Effector.Compiz.Sample.App\Effector.Compiz.Sample.App.csproj" />
     <ProjectReference Include="..\..\samples\Effector.Compiz.Sample.Effects\Effector.Compiz.Sample.Effects.csproj" />
     <ProjectReference Include="..\..\samples\Effector.Sample.App\Effector.Sample.App.csproj" />

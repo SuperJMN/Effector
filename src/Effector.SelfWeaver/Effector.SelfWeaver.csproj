@@ -5,6 +5,7 @@
     <AssemblyName>Effector.SelfWeaver</AssemblyName>
     <IsPackable>false</IsPackable>
     <RollForward>LatestMajor</RollForward>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)/obj/**/*</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

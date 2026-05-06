@@ -11,7 +11,8 @@
 
   <ItemGroup Condition="'$(EffectorUseBuiltRuntimeReference)' != 'true'">
     <ProjectReference Include="..\Effector\Effector.csproj"
-                      AdditionalProperties="EffectorSkipCustomTargets=true;GeneratePackageOnBuild=false;BaseOutputPath=$(MSBuildThisFileDirectory)..\Effector\bin-buildtasks\" />
+                      PrivateAssets="all"
+                      AdditionalProperties="EffectorSkipCustomTargets=true;GeneratePackageOnBuild=false;BaseOutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/;OutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/$(Configuration)/net8.0/" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(EffectorUseBuiltRuntimeReference)' == 'true'">

@@ -17,7 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../../../src/Effector/Effector.csproj"
-                      AdditionalProperties="GeneratePackageOnBuild=false" />
+                      PrivateAssets="all"
+                      AdditionalProperties="GeneratePackageOnBuild=false;BaseOutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/;OutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/$(Configuration)/net8.0/" />
   </ItemGroup>
 
   <Import Project="../../../../src/Effector.Build/buildTransitive/Effector.Build.targets"

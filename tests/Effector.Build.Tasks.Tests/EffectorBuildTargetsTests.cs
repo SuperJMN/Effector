@@ -58,6 +58,110 @@ public sealed class EffectorBuildTargetsTests
     }
 
     [Fact]
+    public void BuildTasksProject_RuntimeProjectReference_Uses_IsolatedOutputPaths()
+    {
+        var project = XDocument.Load(GetBuildTasksProjectPath());
+
+        var reference = Assert.Single(project
+            .Descendants("ProjectReference")
+            .Where(element => ((string?)element.Attribute("Include"))?.Contains(@"..\Effector\Effector.csproj", StringComparison.Ordinal) == true));
+        var properties = ((string?)reference.Attribute("AdditionalProperties")) ?? string.Empty;
+        var privateAssets = ((string?)reference.Attribute("PrivateAssets")) ?? string.Empty;
+
+        Assert.Equal("all", privateAssets, ignoreCase: true);
+        Assert.Contains("EffectorSkipCustomTargets=true", properties, StringComparison.Ordinal);
+        Assert.Contains("BaseOutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/", properties, StringComparison.Ordinal);
+        Assert.Contains("OutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/$(Configuration)/net8.0/", properties, StringComparison.Ordinal);
+        Assert.DoesNotContain("MSBuildProjectExtensionsPath=", properties, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceProjectReferences_To_Effector_Use_IsolatedBaseOutputPath()
+    {
+        var repositoryDirectory = GetRepositoryDirectory();
+        var projectFiles = Directory
+            .EnumerateFiles(repositoryDirectory, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !IsUnderDirectory(path, Path.Combine(repositoryDirectory, "artifacts")))
+            .Where(path => !IsUnderDirectory(path, Path.Combine(repositoryDirectory, "bin")))
+            .Where(path => !IsUnderDirectory(path, Path.Combine(repositoryDirectory, "obj")))
+            .ToArray();
+
+        var rawReferences = new List<string>();
+
+        foreach (var projectFile in projectFiles)
+        {
+            var project = XDocument.Load(projectFile);
+            var references = project
+                .Descendants("ProjectReference")
+                .Where(element => ((string?)element.Attribute("Include"))?.Replace('/', '\\').EndsWith(@"\src\Effector\Effector.csproj", StringComparison.Ordinal) == true ||
+                                  string.Equals(((string?)element.Attribute("Include"))?.Replace('/', '\\'), @"..\Effector\Effector.csproj", StringComparison.Ordinal));
+
+            foreach (var reference in references)
+            {
+                var properties = ((string?)reference.Attribute("AdditionalProperties")) ?? string.Empty;
+                var privateAssets = ((string?)reference.Attribute("PrivateAssets")) ?? string.Empty;
+                if (!properties.Contains("BaseOutputPath=", StringComparison.Ordinal) ||
+                    !properties.Contains("OutputPath=", StringComparison.Ordinal) ||
+                    !string.Equals(privateAssets, "all", StringComparison.OrdinalIgnoreCase))
+                {
+                    rawReferences.Add(Path.GetRelativePath(repositoryDirectory, projectFile));
+                }
+            }
+        }
+
+        Assert.Empty(rawReferences);
+    }
+
+    [Fact]
+    public void SelfWeaverProject_Excludes_ProjectLocalObj_When_IntermediateOutputPath_Is_Redirected()
+    {
+        var project = XDocument.Load(GetSelfWeaverProjectPath());
+
+        var defaultItemExcludes = GetRequiredPropertyValue(project, "DefaultItemExcludes");
+
+        Assert.Contains(@"$(MSBuildProjectDirectory)/obj/**/*", defaultItemExcludes, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EffectorProject_Builds_SelfWeaver_With_IsolatedOutputPaths()
+    {
+        var project = XDocument.Load(GetEffectorProjectPath());
+
+        var selfWeaverDllPath = GetRequiredPropertyValue(project, "_EffectorSelfWeaverDllPath");
+        var selfWeaverObjPath = GetRequiredPropertyValue(project, "_EffectorSelfWeaverObjPath");
+        var properties = GetMSBuildProperties(project, "Effector_BuildSelfWeaver");
+
+        Assert.Equal("$(_EffectorSelfWeaverOutputDir)Effector.SelfWeaver.dll", selfWeaverDllPath);
+        Assert.Contains("$(BaseIntermediateOutputPath)", selfWeaverObjPath, StringComparison.Ordinal);
+        Assert.All(properties, property =>
+        {
+            Assert.Contains("BaseIntermediateOutputPath=$(_EffectorSelfWeaverObjPath)", property, StringComparison.Ordinal);
+            Assert.Contains("MSBuildProjectExtensionsPath=$(_EffectorSelfWeaverObjPath)", property, StringComparison.Ordinal);
+            Assert.Contains("OutputPath=$(_EffectorSelfWeaverOutputDir)", property, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void EffectorProject_Builds_PackTask_With_IsolatedOutputPaths_And_CurrentRuntimeReference()
+    {
+        var project = XDocument.Load(GetEffectorProjectPath());
+
+        var buildTasksObjPath = GetRequiredPropertyValue(project, "_EffectorBuildTasksObjPath");
+        var buildTasksOutputPath = GetRequiredPropertyValue(project, "_EffectorBuildTasksOutputDir");
+        var commands = GetExecCommands(project, "Effector_BuildPackTaskProject");
+
+        Assert.Contains("$(BaseIntermediateOutputPath)", buildTasksObjPath, StringComparison.Ordinal);
+        Assert.Equal("$([System.IO.Path]::Combine('$(_EffectorBuildTasksObjPath)', 'bin'))/", buildTasksOutputPath);
+        Assert.All(commands, command =>
+        {
+            Assert.Contains("-p:BaseIntermediateOutputPath=$(_EffectorBuildTasksObjPath)", command, StringComparison.Ordinal);
+            Assert.Contains("-p:MSBuildProjectExtensionsPath=$(_EffectorBuildTasksObjPath)", command, StringComparison.Ordinal);
+            Assert.Contains("-p:OutputPath=$(_EffectorBuildTasksOutputDir)", command, StringComparison.Ordinal);
+            Assert.Contains("-p:EffectorBuiltRuntimeReferencePath=$(TargetPath)", command, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public void LocalBuildPaths_Are_Resolved_Relative_To_ImportingProject()
     {
         var testRoot = Path.Combine(Path.GetTempPath(), "effector-local-build-path-tests", Guid.NewGuid().ToString("N"));
@@ -346,14 +450,41 @@ public sealed class EffectorBuildTargetsTests
 
     private static string[] GetExecCommands(XContainer document, string targetName)
     {
-        var target = Assert.Single(document
-            .Descendants("Target")
-            .Where(element => string.Equals((string?)element.Attribute("Name"), targetName, StringComparison.Ordinal)));
+        var target = GetRequiredTarget(document, targetName);
 
         return target
             .Elements("Exec")
             .Select(element => ((string?)element.Attribute("Command"))?.Trim() ?? string.Empty)
             .ToArray();
+    }
+
+    private static string[] GetMSBuildProperties(XContainer document, string targetName)
+    {
+        var target = GetRequiredTarget(document, targetName);
+
+        return target
+            .Elements("MSBuild")
+            .Select(element => ((string?)element.Attribute("Properties"))?.Trim() ?? string.Empty)
+            .ToArray();
+    }
+
+    private static XElement GetRequiredTarget(XContainer document, string targetName)
+    {
+        return Assert.Single(document
+            .Descendants("Target")
+            .Where(element => string.Equals((string?)element.Attribute("Name"), targetName, StringComparison.Ordinal)));
+    }
+
+    private static string GetEffectorProjectPath([CallerFilePath] string sourceFilePath = "")
+    {
+        return ResolveRepositoryFile(
+            new[]
+            {
+                "src",
+                "Effector",
+                "Effector.csproj"
+            },
+            sourceFilePath);
     }
 
     private static string GetBuildTargetsPath([CallerFilePath] string sourceFilePath = "")
@@ -392,6 +523,30 @@ public sealed class EffectorBuildTargetsTests
                 "Effector.Build.Tasks.csproj"
             },
             sourceFilePath);
+    }
+
+    private static string GetSelfWeaverProjectPath([CallerFilePath] string sourceFilePath = "")
+    {
+        return ResolveRepositoryFile(
+            new[]
+            {
+                "src",
+                "Effector.SelfWeaver",
+                "Effector.SelfWeaver.csproj"
+            },
+            sourceFilePath);
+    }
+
+    private static bool IsUnderDirectory(string path, string directory)
+    {
+        var relativePath = Path.GetRelativePath(directory, path);
+        return !relativePath.StartsWith("..", StringComparison.Ordinal) &&
+               !Path.IsPathRooted(relativePath);
+    }
+
+    private static string GetRepositoryDirectory([CallerFilePath] string sourceFilePath = "")
+    {
+        return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
     }
 
     private static string GetBuiltTaskAssemblyPath([CallerFilePath] string sourceFilePath = "")

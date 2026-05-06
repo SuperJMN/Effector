@@ -8,7 +8,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Effector\Effector.csproj"
-                      AdditionalProperties="GeneratePackageOnBuild=false" />
+                      PrivateAssets="all"
+                      AdditionalProperties="GeneratePackageOnBuild=false;BaseOutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/;OutputPath=$(MSBuildProjectDirectory)/obj/effector-runtime/$(Configuration)/net8.0/" />
     <ProjectReference Include="..\Effector.Sample.Effects\Effector.Sample.Effects.csproj" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />

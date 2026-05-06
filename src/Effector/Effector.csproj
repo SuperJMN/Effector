@@ -15,9 +15,12 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);Effector_AddBuildTaskPayloadToPackage</TargetsForTfmSpecificContentInPackage>
     <_EffectorSelfWeaverProjectPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Effector.SelfWeaver\Effector.SelfWeaver.csproj'))</_EffectorSelfWeaverProjectPath>
-    <_EffectorSelfWeaverDllPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Effector.SelfWeaver\bin\$(Configuration)\net8.0\Effector.SelfWeaver.dll'))</_EffectorSelfWeaverDllPath>
+    <_EffectorSelfWeaverObjPath Condition="'$(_EffectorSelfWeaverObjPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'effector-self-weaver'))))/</_EffectorSelfWeaverObjPath>
+    <_EffectorSelfWeaverOutputDir Condition="'$(_EffectorSelfWeaverOutputDir)' == ''">$([System.IO.Path]::Combine('$(_EffectorSelfWeaverObjPath)', 'bin'))/</_EffectorSelfWeaverOutputDir>
+    <_EffectorSelfWeaverDllPath>$(_EffectorSelfWeaverOutputDir)Effector.SelfWeaver.dll</_EffectorSelfWeaverDllPath>
     <_EffectorBuildTasksProjectPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Effector.Build.Tasks\Effector.Build.Tasks.csproj'))</_EffectorBuildTasksProjectPath>
-    <_EffectorBuildTasksOutputDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Effector.Build.Tasks\bin\$(Configuration)\net8.0'))</_EffectorBuildTasksOutputDir>
+    <_EffectorBuildTasksObjPath Condition="'$(_EffectorBuildTasksObjPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'effector-pack-task'))))/</_EffectorBuildTasksObjPath>
+    <_EffectorBuildTasksOutputDir Condition="'$(_EffectorBuildTasksOutputDir)' == ''">$([System.IO.Path]::Combine('$(_EffectorBuildTasksObjPath)', 'bin'))/</_EffectorBuildTasksOutputDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,12 +36,12 @@
              Targets="Restore"
              BuildInParallel="false"
              RemoveProperties="TargetFramework;TargetFrameworks;PublishAot;RuntimeIdentifier;SelfContained;PublishTrimmed;PublishSingleFile;PublishReadyToRun;NoBuild"
-             Properties="Configuration=$(Configuration);TargetFramework=net8.0;GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false;NoBuild=false" />
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0;GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false;NoBuild=false;BaseIntermediateOutputPath=$(_EffectorSelfWeaverObjPath);MSBuildProjectExtensionsPath=$(_EffectorSelfWeaverObjPath);OutputPath=$(_EffectorSelfWeaverOutputDir)" />
     <MSBuild Projects="$(_EffectorSelfWeaverProjectPath)"
              Targets="Build"
              BuildInParallel="false"
              RemoveProperties="TargetFramework;TargetFrameworks;PublishAot;RuntimeIdentifier;SelfContained;PublishTrimmed;PublishSingleFile;PublishReadyToRun;NoBuild"
-             Properties="Configuration=$(Configuration);TargetFramework=net8.0;GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false;NoBuild=false" />
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0;GeneratePackageOnBuild=false;DesignTimeBuild=false;BuildingProject=false;NoBuild=false;BaseIntermediateOutputPath=$(_EffectorSelfWeaverObjPath);MSBuildProjectExtensionsPath=$(_EffectorSelfWeaverObjPath);OutputPath=$(_EffectorSelfWeaverOutputDir)" />
   </Target>
 
   <Target Name="Effector_SelfWeave"
@@ -55,8 +58,8 @@
 
   <Target Name="Effector_BuildPackTaskProject"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(NoBuild)' != 'true' and '$(EffectorSkipCustomTargets)' != 'true' and Exists('$(_EffectorBuildTasksProjectPath)')">
-    <Exec Command="dotnet restore &quot;$(_EffectorBuildTasksProjectPath)&quot; --no-dependencies -p:Configuration=$(Configuration) -p:TargetFramework=net8.0 -p:GeneratePackageOnBuild=false -p:DesignTimeBuild=false -p:BuildingProject=false -p:BuildProjectReferences=false -p:EffectorUseBuiltRuntimeReference=true -p:NoBuild=false" />
-    <Exec Command="dotnet msbuild &quot;$(_EffectorBuildTasksProjectPath)&quot; -t:Build -m:1 -p:Configuration=$(Configuration) -p:TargetFramework=net8.0 -p:GeneratePackageOnBuild=false -p:DesignTimeBuild=false -p:BuildingProject=false -p:BuildProjectReferences=false -p:EffectorUseBuiltRuntimeReference=true -p:NoBuild=false -v:minimal" />
+    <Exec Command="dotnet restore &quot;$(_EffectorBuildTasksProjectPath)&quot; --no-dependencies -p:Configuration=$(Configuration) -p:TargetFramework=net8.0 -p:GeneratePackageOnBuild=false -p:DesignTimeBuild=false -p:BuildingProject=false -p:BuildProjectReferences=false -p:EffectorUseBuiltRuntimeReference=true -p:EffectorBuiltRuntimeReferencePath=$(TargetPath) -p:NoBuild=false -p:BaseIntermediateOutputPath=$(_EffectorBuildTasksObjPath) -p:MSBuildProjectExtensionsPath=$(_EffectorBuildTasksObjPath) -p:OutputPath=$(_EffectorBuildTasksOutputDir)" />
+    <Exec Command="dotnet msbuild &quot;$(_EffectorBuildTasksProjectPath)&quot; -t:Build -m:1 -p:Configuration=$(Configuration) -p:TargetFramework=net8.0 -p:GeneratePackageOnBuild=false -p:DesignTimeBuild=false -p:BuildingProject=false -p:BuildProjectReferences=false -p:EffectorUseBuiltRuntimeReference=true -p:EffectorBuiltRuntimeReferencePath=$(TargetPath) -p:NoBuild=false -p:BaseIntermediateOutputPath=$(_EffectorBuildTasksObjPath) -p:MSBuildProjectExtensionsPath=$(_EffectorBuildTasksObjPath) -p:OutputPath=$(_EffectorBuildTasksOutputDir) -v:minimal" />
   </Target>
 
   <Target Name="Effector_PreparePackTaskPayload"
