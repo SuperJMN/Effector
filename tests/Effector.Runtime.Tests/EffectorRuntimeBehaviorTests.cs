@@ -1592,6 +1592,46 @@ public sealed class EffectorRuntimeBehaviorTests
     }
 
     [Fact]
+    public void ForceRasterCapture_IsEnabledByDefault_On_Windows_Linux_And_Android()
+    {
+        Assert.True(EffectorRuntime.ResolveForceRasterCapture(
+            forceRasterCaptureOverride: null,
+            isWindows: true,
+            isLinux: false,
+            isAndroid: false));
+        Assert.True(EffectorRuntime.ResolveForceRasterCapture(
+            forceRasterCaptureOverride: null,
+            isWindows: false,
+            isLinux: true,
+            isAndroid: false));
+        Assert.True(EffectorRuntime.ResolveForceRasterCapture(
+            forceRasterCaptureOverride: null,
+            isWindows: false,
+            isLinux: false,
+            isAndroid: true));
+    }
+
+    [Fact]
+    public void ForceRasterCaptureOverride_Can_Enable_And_Disable_RasterCapture()
+    {
+        Assert.True(EffectorRuntime.ResolveForceRasterCapture(
+            forceRasterCaptureOverride: true,
+            isWindows: false,
+            isLinux: false,
+            isAndroid: false));
+        Assert.False(EffectorRuntime.ResolveForceRasterCapture(
+            forceRasterCaptureOverride: false,
+            isWindows: true,
+            isLinux: true,
+            isAndroid: true));
+        Assert.False(EffectorRuntime.ResolveForceRasterCapture(
+            forceRasterCaptureOverride: null,
+            isWindows: false,
+            isLinux: false,
+            isAndroid: false));
+    }
+
+    [Fact]
     public void ShaderBuilder_Creates_RuntimeShader_When_DirectRuntimeShaders_Are_Enabled_Even_With_Fallback()
     {
         using var surface = SKSurface.Create(new SKImageInfo(64, 48));

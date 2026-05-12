@@ -207,28 +207,24 @@ public static class EffectorRuntime
 
     // GPU-backed SKSurface objects created as intermediate shader capture layers can
     // cause SIGSEGV when finalized on the GC thread because the GPU context is not
-    // active on that thread.  On Linux (X11/Vulkan/GL), this is reliably triggered by
-    // any runtime SkSL shader effect.  The raster capture path creates CPU-backed
-    // surfaces that are safe to finalize on any thread while the runtime shader itself
-    // still executes on the GPU-backed compositor canvas.  Override with
+    // active on that thread.  On Windows and Linux this can surface as native driver
+    // crashes around flush/dispose; on Android it also avoids unbounded transient
+    // capture VRAM during continuous shader animation. The raster capture path creates
+    // CPU-backed surfaces that are safe to finalize on any thread while the runtime
+    // shader itself still executes on the GPU-backed compositor canvas. Override with
     // EFFECTOR_FORCE_RASTER_CAPTURE=true|false.
     private static bool GetForceRasterCapture()
     {
         var envOverride = ParseOptionalBooleanEnvironmentVariable("EFFECTOR_FORCE_RASTER_CAPTURE");
-        if (envOverride.HasValue)
-        {
-            return envOverride.Value;
-        }
-
-        // Linux desktop: GPU-backed surfaces cause SIGSEGV when disposed on the
-        // finalizer thread while the compositor is active on the render thread.
-        // Android: GPU-backed capture surfaces accumulate ~1.4 MB/s of VRAM that
-        // the deferred disposal queue cannot drain fast enough, causing OOM kills
-        // within 60-90 seconds of continuous shader animation.
-        // Both platforms use CPU-backed raster surfaces for capture while the
-        // runtime shader still executes on the GPU-backed compositor canvas.
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || OperatingSystem.IsAndroid();
+        return ResolveForceRasterCapture(
+            envOverride,
+            RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux),
+            OperatingSystem.IsAndroid());
     }
+
+    internal static bool ResolveForceRasterCapture(bool? forceRasterCaptureOverride, bool isWindows, bool isLinux, bool isAndroid) =>
+        forceRasterCaptureOverride ?? isWindows || isLinux || isAndroid;
 
     public static void EnsureInitialized()
     {
